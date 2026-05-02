@@ -3,47 +3,139 @@ src/data_downloader.py
 
 数据采集模块。
 - A 股和 H 股均通过 AkShare 下载真实行情数据，统一接口、无需注册账号。
-- A 股接口：ak.stock_zh_a_hist(symbol, period, start_date, end_date, adjust)
-- H 股接口：ak.stock_hk_hist(symbol, period, start_date, end_date, adjust)
+- A 股接口：ak.stock_zh_a_daily(symbol, start_date, end_date, adjust)
+- H 股接口：ak.stock_hk_daily(symbol, start_date, end_date, adjust)
 """
 
 import logging
+import os
+import sys
 from typing import List, Optional
 
 import pandas as pd
 
-import sys
-import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from config import settings
 from src import database
 
 logger = logging.getLogger(__name__)
 
-# AkShare 返回的列名 → 统一内部字段名（A 股和 H 股列名相同，共用同一映射）
-_AKSHARE_COL_MAP = {
-    "日期": "trade_date",
-    "开盘": "open",
-    "最高": "high",
-    "最低": "low",
-    "收盘": "close",
-    "成交量": "volume",
-    "成交额": "amount",
-}
+
+def _a_share_to_daily_symbol(stock_code: str) -> str:
+    """
+    将 A 股代码转换为 stock_zh_a_daily 需要的格式。
+
+    600519 -> sh600519
+    000001 -> sz000001
+    300750 -> sz300750
+    """
+    code = str(stock_code).zfill(6)
+
+    if code.startswith(("6", "9")):
+        return "sh" + code
+    elif code.startswith(("0", "2", "3")):
+        return "sz" + code
+    else:
+        raise ValueError(f"无法识别 A 股代码：{stock_code}")
 
 
-# ──────────────────────────────────────────────
-# 日期格式转换（settings 用 YYYY-MM-DD，AkShare 用 YYYYMMDD）
-# ──────────────────────────────────────────────
+def _hk_to_daily_symbol(stock_code: str) -> str:
+    """
+    将 H 股代码转换为 stock_hk_daily 需要的格式。
 
-def _to_akshare_date(date_str: str) -> str:
-    """将 '2023-01-01' 转为 AkShare 所需的 '20230101'。"""
-    return date_str.replace("-", "")
+    700 -> 00700
+    00700 -> 00700
+    2318 -> 02318
+    """
+    return str(stock_code).zfill(5)
 
 
-# ──────────────────────────────────────────────
-# A 股下载（AkShare）
-# ──────────────────────────────────────────────
+def _normalize_date(date_str: str) -> str:
+    """
+    转成 YYYY-MM-DD，用于筛选 DataFrame。
+    """
+    return pd.to_datetime(date_str).strftime("%Y-%m-%d")
+
+
+def _parse_daily_df(
+    df: pd.DataFrame,
+    stock_code: str,
+    source: str,
+    start_date: str,
+    end_date: str,
+) -> list:
+    """
+    将 stock_zh_a_daily / stock_hk_daily 返回的数据转换为数据库写入格式。
+
+    daily 接口字段通常是：
+    date, open, high, low, close, volume, amount
+    """
+    if df is None or df.empty:
+        return []
+
+    df = df.copy()
+
+    required_cols = [
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+    ]
+
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        logger.warning("%s：AkShare daily 数据缺少字段 %s", stock_code, missing)
+        logger.warning("%s：实际字段为 %s", stock_code, list(df.columns))
+        return []
+
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+
+    start = _normalize_date(start_date)
+    end = _normalize_date(end_date)
+
+    df = df[(df["date"] >= start) & (df["date"] <= end)].copy()
+
+    if df.empty:
+        logger.warning("%s：日期范围 %s ~ %s 内无行情数据", stock_code, start, end)
+        return []
+
+    out = pd.DataFrame()
+    out["trade_date"] = df["date"]
+    out["open"] = pd.to_numeric(df["open"], errors="coerce")
+    out["high"] = pd.to_numeric(df["high"], errors="coerce")
+    out["low"] = pd.to_numeric(df["low"], errors="coerce")
+    out["close"] = pd.to_numeric(df["close"], errors="coerce")
+    out["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    out["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+
+    out["stock_code"] = str(stock_code).zfill(5) if source == "akshare_hk_daily" else str(stock_code).zfill(6)
+    out["source"] = source
+
+    out = out.dropna(subset=["trade_date", "close"])
+    out = out[out["close"] > 0]
+
+    return out.to_dict(orient="records")
+
+
+def _write_records(records: list, stock_code: str, db_path: Optional[str]) -> None:
+    """
+    写入数据库。
+    """
+    if not records:
+        logger.warning("%s：没有可写入的价格数据", stock_code)
+        return
+
+    database.upsert_stock_prices(records, db_path)
+    logger.info("%s：成功写入 %d 条价格记录", stock_code, len(records))
+
+
+# =========================================================
+# A 股下载
+# =========================================================
 
 def download_a_share_data(
     stock_list: List[str] = None,
@@ -52,29 +144,32 @@ def download_a_share_data(
     db_path: str = None,
 ) -> None:
     """
-    通过 AkShare 下载 A 股日线行情并写入数据库。
-
-    Args:
-        stock_list: 6位纯数字 A 股代码列表，默认使用 settings.A_SHARE_STOCKS。
-        start_date: 起始日期（YYYY-MM-DD），默认使用 settings.START_DATE。
-        end_date:   结束日期（YYYY-MM-DD），默认使用 settings.END_DATE。
-        db_path:    SQLite 数据库路径，默认使用 settings.DB_PATH。
+    使用 AkShare stock_zh_a_daily 下载 A 股日线数据。
     """
-    try:
-        import akshare as ak
-    except ImportError:
-        logger.error("未安装 akshare，请执行：pip install akshare")
-        raise
+    import akshare as ak
 
     stocks = stock_list or settings.A_SHARE_STOCKS
-    start  = _to_akshare_date(start_date or settings.START_DATE)
-    end    = _to_akshare_date(end_date   or settings.END_DATE)
+    start = start_date or settings.START_DATE
+    end = end_date or settings.END_DATE
 
-    logger.info("开始下载 A 股数据（AkShare），共 %d 只，日期范围：%s ~ %s",
-                len(stocks), start, end)
+    logger.info(
+        "开始下载 A 股数据（AkShare stock_zh_a_daily），共 %d 只，日期范围：%s ~ %s",
+        len(stocks),
+        start,
+        end,
+    )
 
-    for code in stocks:
-        _download_single_a_share(ak, code, start, end, db_path)
+    for stock_code in stocks:
+        try:
+            _download_single_a_share(
+                ak=ak,
+                stock_code=stock_code,
+                start_date=start,
+                end_date=end,
+                db_path=db_path,
+            )
+        except Exception as exc:
+            logger.error("下载 A 股 %s 时发生异常：%s", stock_code, exc)
 
     logger.info("A 股数据下载完成。")
 
@@ -87,41 +182,33 @@ def _download_single_a_share(
     db_path: Optional[str],
 ) -> None:
     """
-    下载单只 A 股日线数据并写入数据库。
-
-    Args:
-        ak:         已导入的 akshare 模块。
-        stock_code: 6位纯数字代码（如 '600519'）。
-        start_date: AkShare 格式起始日期（'20230101'）。
-        end_date:   AkShare 格式结束日期（'20241231'）。
-        db_path:    数据库路径。
+    下载单只 A 股。
     """
-    logger.info("下载 A 股 %s ...", stock_code)
-    try:
-        df = ak.stock_zh_a_hist(
-            symbol=stock_code,
-            period="daily",
-            start_date=start_date,
-            end_date=end_date,
-            adjust="",       # 不复权；可改为 "qfq"（前复权）或 "hfq"（后复权）
-        )
+    symbol = _a_share_to_daily_symbol(stock_code)
 
-        if df is None or df.empty:
-            logger.warning("  %s：未获取到数据（可能代码错误或停牌）", stock_code)
-            return
+    logger.info("下载 A 股 %s，AkShare symbol=%s ...", stock_code, symbol)
 
-        records = _parse_akshare_df(df, stock_code, _AKSHARE_COL_MAP, source="akshare_a")
-        if records:
-            database.upsert_stock_prices(records, db_path)
-            logger.info("  %s：写入 %d 条记录", stock_code, len(records))
+    df = ak.stock_zh_a_daily(
+        symbol=symbol,
+        start_date=pd.to_datetime(start_date).strftime("%Y%m%d"),
+        end_date=pd.to_datetime(end_date).strftime("%Y%m%d"),
+        adjust="",
+    )
 
-    except Exception as e:
-        logger.error("下载 A 股 %s 时发生异常：%s", stock_code, e)
+    records = _parse_daily_df(
+        df=df,
+        stock_code=stock_code,
+        source="akshare_a_daily",
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    _write_records(records, stock_code, db_path)
 
 
-# ──────────────────────────────────────────────
-# H 股下载（AkShare）
-# ──────────────────────────────────────────────
+# =========================================================
+# H 股下载
+# =========================================================
 
 def download_hk_stock_data(
     stock_list: List[str] = None,
@@ -130,29 +217,32 @@ def download_hk_stock_data(
     db_path: str = None,
 ) -> None:
     """
-    通过 AkShare 下载 H 股日线行情并写入数据库。
-
-    Args:
-        stock_list: 5位纯数字港股代码列表，默认使用 settings.H_SHARE_STOCKS。
-        start_date: 起始日期（YYYY-MM-DD），默认使用 settings.START_DATE。
-        end_date:   结束日期（YYYY-MM-DD），默认使用 settings.END_DATE。
-        db_path:    SQLite 数据库路径，默认使用 settings.DB_PATH。
+    使用 AkShare stock_hk_daily 下载 H 股日线数据。
     """
-    try:
-        import akshare as ak
-    except ImportError:
-        logger.error("未安装 akshare，请执行：pip install akshare")
-        raise
+    import akshare as ak
 
     stocks = stock_list or settings.H_SHARE_STOCKS
-    start  = _to_akshare_date(start_date or settings.START_DATE)
-    end    = _to_akshare_date(end_date   or settings.END_DATE)
+    start = start_date or settings.START_DATE
+    end = end_date or settings.END_DATE
 
-    logger.info("开始下载 H 股数据（AkShare），共 %d 只，日期范围：%s ~ %s",
-                len(stocks), start, end)
+    logger.info(
+        "开始下载 H 股数据（AkShare stock_hk_daily），共 %d 只，日期范围：%s ~ %s",
+        len(stocks),
+        start,
+        end,
+    )
 
-    for code in stocks:
-        _download_single_hk_share(ak, code, start, end, db_path)
+    for stock_code in stocks:
+        try:
+            _download_single_hk_share(
+                ak=ak,
+                stock_code=stock_code,
+                start_date=start,
+                end_date=end,
+                db_path=db_path,
+            )
+        except Exception as exc:
+            logger.error("下载 H 股 %s 时发生异常：%s", stock_code, exc)
 
     logger.info("H 股数据下载完成。")
 
@@ -165,74 +255,23 @@ def _download_single_hk_share(
     db_path: Optional[str],
 ) -> None:
     """
-    下载单只 H 股日线数据并写入数据库。
-
-    Args:
-        ak:         已导入的 akshare 模块。
-        stock_code: 5位纯数字港股代码（如 '00700'）。
-        start_date: AkShare 格式起始日期。
-        end_date:   AkShare 格式结束日期。
-        db_path:    数据库路径。
+    下载单只 H 股。
     """
-    logger.info("下载 H 股 %s ...", stock_code)
-    try:
-        df = ak.stock_hk_hist(
-            symbol=stock_code,
-            period="daily",
-            start_date=start_date,
-            end_date=end_date,
-            adjust="",
-        )
+    symbol = _hk_to_daily_symbol(stock_code)
 
-        if df is None or df.empty:
-            logger.warning("  %s：未获取到数据（可能代码错误或停牌）", stock_code)
-            return
+    logger.info("下载 H 股 %s，AkShare symbol=%s ...", stock_code, symbol)
 
-        records = _parse_akshare_df(df, stock_code, _AKSHARE_COL_MAP, source="akshare_hk")
-        if records:
-            database.upsert_stock_prices(records, db_path)
-            logger.info("  %s：写入 %d 条记录", stock_code, len(records))
+    df = ak.stock_hk_daily(
+        symbol=symbol,
+        adjust="",
+    )
 
-    except Exception as e:
-        logger.error("下载 H 股 %s 时发生异常：%s", stock_code, e)
+    records = _parse_daily_df(
+        df=df,
+        stock_code=stock_code,
+        source="akshare_hk_daily",
+        start_date=start_date,
+        end_date=end_date,
+    )
 
-
-# ──────────────────────────────────────────────
-# 公共解析函数
-# ──────────────────────────────────────────────
-
-def _parse_akshare_df(
-    df: "pd.DataFrame",
-    stock_code: str,
-    col_map: dict,
-    source: str,
-) -> list:
-    """
-    将 AkShare 返回的 DataFrame 转换为数据库写入格式的字典列表。
-
-    Args:
-        df:         AkShare 返回的 DataFrame。
-        stock_code: 股票代码（写入 stock_code 字段）。
-        col_map:    AkShare 列名到内部字段名的映射。
-        source:     数据来源标记（写入 source 字段）。
-
-    Returns:
-        可直接传入 database.upsert_stock_prices() 的字典列表。
-    """
-    df = df.rename(columns=col_map)
-
-    required = ["trade_date", "open", "high", "low", "close", "volume", "amount"]
-    missing  = [c for c in required if c not in df.columns]
-    if missing:
-        logger.warning("  %s：DataFrame 缺少字段 %s，跳过", stock_code, missing)
-        return []
-
-    df = df[required].copy()
-    df["trade_date"] = df["trade_date"].astype(str)
-    df["stock_code"] = stock_code
-    df["source"]     = source
-
-    # 过滤收盘价为空或零的行
-    df = df[df["close"].notna() & (df["close"] != 0)]
-
-    return df.to_dict(orient="records")
+    _write_records(records, stock_code, db_path)
