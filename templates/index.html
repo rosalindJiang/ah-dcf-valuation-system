@@ -414,7 +414,12 @@
   <!-- 图表区 -->
   <div class="chart-card"><div id="chart-table"><div class="empty-state">请选择股票后点击「运行估值」</div></div></div>
   <div class="chart-card"><div id="chart-upside"><div class="empty-state">请选择股票后点击「运行估值」</div></div></div>
-  <div class="chart-card"><div id="chart-compare"><div class="empty-state">请选择股票后点击「运行估值」</div></div></div>
+
+  <!-- 价格对比（A/H 并排，量纲不同不能混在一起） -->
+  <div class="history-row">
+    <div class="chart-card"><div id="chart-compare-a"><div class="empty-state">请选择股票后点击「运行估值」</div></div></div>
+    <div class="chart-card"><div id="chart-compare-h"><div class="empty-state">请选择股票后点击「运行估值」</div></div></div>
+  </div>
 
   <!-- 历史走势（A/H 并排） -->
   <div class="history-row">
@@ -432,13 +437,21 @@
   const COLORS = ["#3498db","#e74c3c","#2ecc71","#9b59b6","#f39c12",
                   "#1abc9c","#e67e22","#34495e","#e91e63","#00bcd4"];
 
-  /* ── 下拉框控制 ── */
-  function toggleDropdown() {
-    const panel = document.getElementById('dd-panel');
-    panel.classList.toggle('open');
+  // 股票名称映射（由服务端注入）
+  const STOCK_NAME_MAP = {};
+  {% for s in stocks %}STOCK_NAME_MAP["{{ s.code }}"] = "{{ s.name }}";
+  {% endfor %}
+
+  function stockLabel(code) {
+    const name = STOCK_NAME_MAP[code];
+    return name ? name + '(' + code + ')' : code;
   }
 
-  // 点击外部关闭下拉
+  /* ── 下拉框控制 ── */
+  function toggleDropdown() {
+    document.getElementById('dd-panel').classList.toggle('open');
+  }
+
   document.addEventListener('click', function(e) {
     const wrapper = document.getElementById('dd-wrapper');
     if (!wrapper.contains(e.target)) {
@@ -455,42 +468,18 @@
     });
   }
 
-  function selectAll() {
-    document.querySelectorAll('.stock-cb').forEach(function(cb) { cb.checked = true; });
-    updateDropdownLabel();
-  }
-
-  function clearAll() {
-    document.querySelectorAll('.stock-cb').forEach(function(cb) { cb.checked = false; });
-    updateDropdownLabel();
-  }
-
-  function selectAOnly() {
-    document.querySelectorAll('.stock-cb').forEach(function(cb) {
-      const opt = cb.closest('.stock-option');
-      cb.checked = opt && opt.dataset.market === 'A';
-    });
-    updateDropdownLabel();
-  }
-
-  function selectHOnly() {
-    document.querySelectorAll('.stock-cb').forEach(function(cb) {
-      const opt = cb.closest('.stock-option');
-      cb.checked = opt && opt.dataset.market === 'H';
-    });
-    updateDropdownLabel();
-  }
+  function selectAll()   { document.querySelectorAll('.stock-cb').forEach(function(cb){ cb.checked = true; });  updateDropdownLabel(); }
+  function clearAll()    { document.querySelectorAll('.stock-cb').forEach(function(cb){ cb.checked = false; }); updateDropdownLabel(); }
+  function selectAOnly() { document.querySelectorAll('.stock-cb').forEach(function(cb){ cb.checked = cb.closest('.stock-option').dataset.market === 'A'; }); updateDropdownLabel(); }
+  function selectHOnly() { document.querySelectorAll('.stock-cb').forEach(function(cb){ cb.checked = cb.closest('.stock-option').dataset.market === 'H'; }); updateDropdownLabel(); }
 
   function getSelectedStocks() {
-    return Array.from(document.querySelectorAll('.stock-cb:checked')).map(function(cb) {
-      return cb.value;
-    });
+    return Array.from(document.querySelectorAll('.stock-cb:checked')).map(function(cb){ return cb.value; });
   }
 
   function updateDropdownLabel() {
     const n = getSelectedStocks().length;
     document.getElementById('dd-label').textContent = '已选 ' + n + ' 只股票';
-    // Highlight selected options
     document.querySelectorAll('.stock-option').forEach(function(el) {
       const cb = el.querySelector('.stock-cb');
       el.classList.toggle('selected', cb && cb.checked);
@@ -500,25 +489,14 @@
   /* ── 运行估值 ── */
   async function runValuation() {
     const stocks = getSelectedStocks();
-    if (!stocks.length) {
-      showError('请至少选择一只股票');
-      return;
-    }
+    if (!stocks.length) { showError('请至少选择一只股票'); return; }
     const startDate = document.getElementById('startDate').value;
     const endDate   = document.getElementById('endDate').value;
-    if (!startDate || !endDate) {
-      showError('请填写完整的日期范围');
-      return;
-    }
-    if (startDate > endDate) {
-      showError('起始日期不能晚于结束日期');
-      return;
-    }
+    if (!startDate || !endDate) { showError('请填写完整的日期范围'); return; }
+    if (startDate > endDate)    { showError('起始日期不能晚于结束日期'); return; }
 
-    // 显示加载状态
     clearAlerts();
     setLoading(true);
-
     try {
       const resp = await fetch('/api/run', {
         method: 'POST',
@@ -526,20 +504,9 @@
         body: JSON.stringify({ stocks, start_date: startDate, end_date: endDate }),
       });
       const data = await resp.json();
-
-      if (!resp.ok) {
-        showError(data.error || '服务器错误，请查看日志');
-        return;
-      }
-
-      // 显示警告（下载失败等非致命错误）
-      if (data.errors && data.errors.length) {
-        showWarning(data.errors.join('<br>'));
-      }
-
-      // 渲染图表
+      if (!resp.ok) { showError(data.error || '服务器错误，请查看日志'); return; }
+      if (data.errors && data.errors.length) showWarning(data.errors.join('<br>'));
       renderAll(data.results, data.history, data.a_stocks, data.h_stocks);
-
     } catch (err) {
       showError('请求失败：' + err.message);
     } finally {
@@ -548,53 +515,38 @@
   }
 
   function setLoading(on) {
-    const bar = document.getElementById('loading-bar');
-    const btn = document.getElementById('btn-run');
-    bar.classList.toggle('visible', on);
-    btn.disabled = on;
+    document.getElementById('loading-bar').classList.toggle('visible', on);
+    document.getElementById('btn-run').disabled = on;
   }
-
   function clearAlerts() {
-    const w = document.getElementById('alert-warning');
-    const e = document.getElementById('alert-error');
-    w.classList.remove('visible'); w.innerHTML = '';
-    e.classList.remove('visible'); e.innerHTML = '';
+    ['alert-warning','alert-error'].forEach(function(id){
+      var el = document.getElementById(id); el.classList.remove('visible'); el.innerHTML = '';
+    });
   }
+  function showWarning(msg) { var el = document.getElementById('alert-warning'); el.innerHTML = '⚠️ ' + msg; el.classList.add('visible'); }
+  function showError(msg)   { var el = document.getElementById('alert-error');   el.innerHTML = '❌ ' + msg; el.classList.add('visible'); }
 
-  function showWarning(msg) {
-    const el = document.getElementById('alert-warning');
-    el.innerHTML = '⚠️ ' + msg;
-    el.classList.add('visible');
-  }
-
-  function showError(msg) {
-    const el = document.getElementById('alert-error');
-    el.innerHTML = '❌ ' + msg;
-    el.classList.add('visible');
-  }
-
-  /* ── 主渲染函数 ── */
+  /* ── 主渲染入口 ── */
   function renderAll(results, history, aStocks, hStocks) {
     renderStats(results);
     renderTable(results);
     renderUpsideBar(results);
-    renderPriceComparison(results);
+    renderPriceComparison(results, aStocks, hStocks);
     renderPriceHistory(aStocks, hStocks, history);
   }
 
   /* ── 统计卡片 ── */
   function renderStats(data) {
     const n     = data.length;
-    const under = data.filter(function(r) { return r.upside_downside_pct > 0; }).length;
+    const under = data.filter(function(r){ return r.upside_downside_pct > 0; }).length;
     const over  = n - under;
-    const avg   = n ? data.reduce(function(s, r) { return s + r.upside_downside_pct; }, 0) / n : 0;
+    const avg   = n ? data.reduce(function(s,r){ return s + r.upside_downside_pct; }, 0) / n : 0;
     document.getElementById('stat-total').textContent = n;
     document.getElementById('stat-under').textContent = under;
     document.getElementById('stat-over').textContent  = over;
     document.getElementById('stat-avg').textContent   = (avg >= 0 ? '+' : '') + avg.toFixed(1) + '%';
   }
 
-  /* ── 评级 ── */
   function rating(v) {
     if (v >= 30)  return "⬆⬆ 明显低估";
     if (v >= 10)  return "⬆ 低估";
@@ -606,137 +558,141 @@
   /* ── 明细表格 ── */
   function renderTable(data) {
     const el = document.getElementById('chart-table');
-    if (!data.length) {
-      el.innerHTML = '<div class="empty-state">暂无估值数据</div>';
-      return;
-    }
-    const rowColors = data.map(function(r) {
-      return r.upside_downside_pct >= 10 ? "#d5f5e3" :
-             r.upside_downside_pct <= -10 ? "#fadbd8" : "#fdfefe";
+    if (!data.length) { el.innerHTML = '<div class="empty-state">暂无估值数据</div>'; return; }
+    const rowColors = data.map(function(r){
+      return r.upside_downside_pct >= 10 ? "#d5f5e3" : r.upside_downside_pct <= -10 ? "#fadbd8" : "#fdfefe";
     });
-    const trace = {
+    Plotly.react(el, [{
       type: "table",
       header: {
-        values: ["股票代码","估值日期","市场价","内在价值","高低估(%)","WACC","终端增长率","综合评级"],
-        fill: { color: "#2c3e50" },
-        font: { color: "white", size: 13 },
-        align: "center",
-        height: 38
+        values: ["股票名称","代码","估值日期","市场价","内在价值","高低估(%)","WACC","综合评级"],
+        fill: { color: "#2c3e50" }, font: { color: "white", size: 13 },
+        align: "center", height: 38
       },
       cells: {
         values: [
-          data.map(function(r) { return r.stock_code; }),
-          data.map(function(r) { return r.valuation_date; }),
-          data.map(function(r) { return r.latest_market_price.toFixed(2); }),
-          data.map(function(r) { return r.estimated_intrinsic_value.toFixed(2); }),
-          data.map(function(r) { return (r.upside_downside_pct >= 0 ? "+" : "") + r.upside_downside_pct.toFixed(1) + "%"; }),
-          data.map(function(r) { return (r.wacc * 100).toFixed(1) + "%"; }),
-          data.map(function(r) { return (r.terminal_growth_rate * 100).toFixed(1) + "%"; }),
-          data.map(function(r) { return rating(r.upside_downside_pct); })
+          data.map(function(r){ return STOCK_NAME_MAP[r.stock_code] || r.stock_code; }),
+          data.map(function(r){ return r.stock_code; }),
+          data.map(function(r){ return r.valuation_date; }),
+          data.map(function(r){ return r.latest_market_price.toFixed(2); }),
+          data.map(function(r){ return r.estimated_intrinsic_value.toFixed(2); }),
+          data.map(function(r){ return (r.upside_downside_pct >= 0 ? "+" : "") + r.upside_downside_pct.toFixed(1) + "%"; }),
+          data.map(function(r){ return (r.wacc * 100).toFixed(1) + "%"; }),
+          data.map(function(r){ return rating(r.upside_downside_pct); })
         ],
         fill: { color: Array(8).fill(rowColors) },
-        align: "center",
-        font: { size: 12 },
-        height: 32
+        align: "center", font: { size: 12 }, height: 32
       }
-    };
-    Plotly.react(el, [trace], {
+    }], {
       title: { text: "DCF 估值结果明细", font: { size: 15 } },
       height: Math.max(280, data.length * 36 + 110),
       margin: { l: 20, r: 20, t: 55, b: 20 },
-      paper_bgcolor: "white",
-      font: { family: "Arial, sans-serif" }
+      paper_bgcolor: "white", font: { family: "Arial, sans-serif" }
     }, { displayModeBar: false });
   }
 
-  /* ── 高低估条形图 ── */
+  /* ── 高低估横向条形图
+       X 轴（横轴）= 高低估百分比
+       Y 轴（纵轴）= 股票名称
+  ── */
   function renderUpsideBar(data) {
     const el = document.getElementById('chart-upside');
-    if (!data.length) {
-      el.innerHTML = '<div class="empty-state">暂无估值数据</div>';
-      return;
-    }
-    const sorted = data.slice().sort(function(a, b) { return a.upside_downside_pct - b.upside_downside_pct; });
-    const pcts   = sorted.map(function(r) { return r.upside_downside_pct; });
+    if (!data.length) { el.innerHTML = '<div class="empty-state">暂无估值数据</div>'; return; }
+
+    const sorted = data.slice().sort(function(a,b){ return a.upside_downside_pct - b.upside_downside_pct; });
+    const pcts   = sorted.map(function(r){ return r.upside_downside_pct; });
+    const labels = sorted.map(function(r){ return stockLabel(r.stock_code); });
+
     Plotly.react(el, [{
       type: "bar", orientation: "h",
       x: pcts,
-      y: sorted.map(function(r) { return r.stock_code; }),
-      marker: { color: pcts.map(function(p) { return p > 0 ? "#27ae60" : "#e74c3c"; }) },
-      text: pcts.map(function(p) { return (p >= 0 ? "+" : "") + p.toFixed(1) + "%"; }),
+      y: labels,
+      marker: { color: pcts.map(function(p){ return p > 0 ? "#27ae60" : "#e74c3c"; }) },
+      text: pcts.map(function(p){ return (p >= 0 ? "+" : "") + p.toFixed(1) + "%"; }),
       textposition: "outside",
-      hovertemplate: "<b>%{y}</b><br>高低估：%{x:+.2f}%<extra></extra>"
+      hovertemplate: "<b>%{y}</b><br>高低估：%{x:+.1f}%<extra></extra>"
     }], {
-      title: { text: "各股票高低估百分比（正值 = 低估，负值 = 高估）", font: { size: 15 } },
-      xaxis: { title: "高低估 (%)", gridcolor: "#f0f0f0", zerolinecolor: "#95a5a6" },
-      height: Math.max(360, sorted.length * 46),
+      title: { text: "各股票高低估百分比（正值＝低估，负值＝高估）", font: { size: 15 } },
+      xaxis: { title: "高低估 (%)", gridcolor: "#f0f0f0", zerolinecolor: "#95a5a6", zeroline: true },
+      yaxis: { automargin: true },
+      height: Math.max(380, sorted.length * 52),
       plot_bgcolor: "white", paper_bgcolor: "white",
       font: { family: "Arial, sans-serif" },
-      margin: { l: 20, r: 70, t: 55, b: 40 },
+      margin: { l: 20, r: 90, t: 55, b: 50 },
       shapes: [{ type: "line", x0: 0, x1: 0, y0: -0.5, y1: sorted.length - 0.5,
                  line: { color: "#95a5a6", width: 1.5, dash: "dash" } }]
     }, { displayModeBar: false });
   }
 
-  /* ── 市场价 vs 内在价值 ── */
-  function renderPriceComparison(data) {
-    const el = document.getElementById('chart-compare');
-    if (!data.length) {
-      el.innerHTML = '<div class="empty-state">暂无估值数据</div>';
-      return;
+  /* ── 市场价 vs 内在价值对比
+       A股（元）和H股（港元）量纲不同，分成两张独立图表
+       X 轴（横轴）= 股票名称
+       Y 轴（纵轴）= 价格（各自货币）
+  ── */
+  function renderPriceComparison(results, aStocks, hStocks) {
+    function buildChart(el, codes, currency, title) {
+      const subset = results.filter(function(r){ return codes.indexOf(r.stock_code) >= 0; });
+      if (!subset.length) { el.innerHTML = '<div class="empty-state">未选择该市场股票</div>'; return; }
+      const labels = subset.map(function(r){ return STOCK_NAME_MAP[r.stock_code] || r.stock_code; });
+      Plotly.react(el, [
+        {
+          type: "bar", name: "市场价",
+          x: labels, y: subset.map(function(r){ return r.latest_market_price; }),
+          marker: { color: "#3498db" },
+          hovertemplate: "<b>%{x}</b><br>市场价：%{y:.2f} " + currency + "<extra></extra>"
+        },
+        {
+          type: "bar", name: "DCF 内在价值",
+          x: labels, y: subset.map(function(r){ return r.estimated_intrinsic_value; }),
+          marker: { color: "#e67e22" },
+          hovertemplate: "<b>%{x}</b><br>内在价值：%{y:.2f} " + currency + "<extra></extra>"
+        }
+      ], {
+        title: { text: title, font: { size: 14 } },
+        barmode: "group",
+        xaxis: { title: "股票", automargin: true },
+        yaxis: { title: "价格（" + currency + "）", gridcolor: "#f0f0f0" },
+        height: 400,
+        plot_bgcolor: "white", paper_bgcolor: "white",
+        font: { family: "Arial, sans-serif" },
+        legend: { x: 0.01, y: 0.99, bgcolor: "rgba(255,255,255,0.85)" },
+        margin: { l: 70, r: 20, t: 55, b: 70 }
+      }, { displayModeBar: false });
     }
-    const codes = data.map(function(r) { return r.stock_code; });
-    Plotly.react(el, [
-      {
-        type: "bar", name: "市场价", x: codes,
-        y: data.map(function(r) { return r.latest_market_price; }),
-        marker: { color: "#3498db" },
-        hovertemplate: "<b>%{x}</b><br>市场价：%{y:.2f}<extra></extra>"
-      },
-      {
-        type: "bar", name: "DCF 内在价值", x: codes,
-        y: data.map(function(r) { return r.estimated_intrinsic_value; }),
-        marker: { color: "#e67e22" },
-        hovertemplate: "<b>%{x}</b><br>内在价值：%{y:.2f}<extra></extra>"
-      }
-    ], {
-      title: { text: "市场价 vs DCF 内在价值对比", font: { size: 15 } },
-      barmode: "group",
-      xaxis: { title: "股票代码" },
-      yaxis: { title: "价格（元 / 港元）", gridcolor: "#f0f0f0" },
-      height: 420,
-      plot_bgcolor: "white", paper_bgcolor: "white",
-      font: { family: "Arial, sans-serif" },
-      legend: { x: 0.01, y: 0.99, bgcolor: "rgba(255,255,255,0.85)" },
-      margin: { l: 20, r: 20, t: 55, b: 40 }
-    }, { displayModeBar: false });
+
+    buildChart(document.getElementById('chart-compare-a'), aStocks, "元",   "A 股：市场价 vs DCF 内在价值（元）");
+    buildChart(document.getElementById('chart-compare-h'), hStocks, "港元", "H 股：市场价 vs DCF 内在价值（港元）");
   }
 
-  /* ── 历史走势图 ── */
+  /* ── 历史收盘价走势图
+       X 轴（横轴）= 交易日期
+       Y 轴（纵轴）= 收盘价（各自货币）
+  ── */
   function renderPriceHistory(aStocks, hStocks, history) {
-    function buildTraces(codes, prefix) {
+    function buildTraces(codes) {
       return codes.map(function(code, i) {
         const hist = history[code] || [];
         return {
           type: "scatter", mode: "lines",
-          name: prefix + ":" + code,
-          x: hist.map(function(h) { return h.date; }),
-          y: hist.map(function(h) { return h.close; }),
-          line: { color: COLORS[i % COLORS.length], width: 1.5 },
-          hovertemplate: "<b>" + code + "</b><br>%{x}<br>收盘价：%{y:.2f}<extra></extra>"
+          name: stockLabel(code),
+          x: hist.map(function(h){ return h.date; }),
+          y: hist.map(function(h){ return h.close; }),
+          line: { color: COLORS[i % COLORS.length], width: 1.8 },
+          hovertemplate: "<b>" + stockLabel(code) + "</b><br>日期：%{x}<br>收盘价：%{y:.2f}<extra></extra>"
         };
       });
     }
-    function histLayout(title) {
+
+    function histLayout(title, yTitle) {
       return {
         title: { text: title, font: { size: 14 } },
-        height: 350,
+        height: 360,
         plot_bgcolor: "white", paper_bgcolor: "white",
         font: { family: "Arial, sans-serif" },
-        xaxis: { gridcolor: "#f0f0f0", tickangle: -30 },
-        yaxis: { gridcolor: "#f0f0f0" },
+        xaxis: { title: "日期", gridcolor: "#f0f0f0", tickangle: -30, automargin: true },
+        yaxis: { title: yTitle, gridcolor: "#f0f0f0" },
         legend: { bgcolor: "rgba(255,255,255,0.85)", font: { size: 11 } },
-        margin: { l: 50, r: 20, t: 45, b: 50 }
+        margin: { l: 70, r: 20, t: 50, b: 70 }
       };
     }
 
@@ -746,14 +702,12 @@
     if (!aStocks || !aStocks.length) {
       elA.innerHTML = '<div class="empty-state">未选择 A 股</div>';
     } else {
-      Plotly.react(elA, buildTraces(aStocks, "A"), histLayout("A 股历史收盘价走势"),
-                   { displayModeBar: false });
+      Plotly.react(elA, buildTraces(aStocks), histLayout("A 股历史收盘价走势", "收盘价（元）"), { displayModeBar: false });
     }
     if (!hStocks || !hStocks.length) {
       elH.innerHTML = '<div class="empty-state">未选择 H 股</div>';
     } else {
-      Plotly.react(elH, buildTraces(hStocks, "H"), histLayout("H 股历史收盘价走势"),
-                   { displayModeBar: false });
+      Plotly.react(elH, buildTraces(hStocks), histLayout("H 股历史收盘价走势", "收盘价（港元）"), { displayModeBar: false });
     }
   }
 
