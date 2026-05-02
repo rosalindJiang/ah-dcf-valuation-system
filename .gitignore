@@ -16,11 +16,10 @@ venv/
 env/
 .env/
 
-# 运行产出（包含真实行情数据和生成报告，不应提交到版本库）
+# 运行产出（包含真实行情数据，不应提交到版本库）
 data/*.db
 data/*.db-shm
 data/*.db-wal
-data/*.html
 
 # IDE
 .idea/
