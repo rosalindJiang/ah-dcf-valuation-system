@@ -261,30 +261,31 @@ database.query_all_dcf_results()
     ▼
 results（估值结果列表）
     │
-    ├─① _chart_table(results)
-    │       go.Table：股票代码、市场价、内在价值、高低估%、WACC、评级
-    │       行颜色：高低估 ≥10% → 绿；≤-10% → 红；其他 → 白
-    │
-    ├─② _chart_upside_bar(results)
-    │       go.Bar（horizontal）：高低估% 水平图
-    │       颜色：正值=绿(#27ae60)，负值=红(#e74c3c)
-    │       按百分比升序排列，零轴竖线标注
-    │
-    ├─③ _chart_price_comparison(results)
-    │       go.Bar（grouped）：市场价(蓝) vs 内在价值(橙)
-    │
-    ├─④ _chart_price_history()
+    ├─① 预加载全量价格数据
     │       database.query_price_history(code) × 10只
-    │       make_subplots(1×2)：左=A股折线，右=H股折线
+    │       price_history = {code: [{date, close}, ...]}
     │
-    └─⑤ _build_html(results, charts...)
-            ├── 顶部统计卡片（总数/低估数/高估数/平均幅度）
+    └─② _build_html(results, price_history)
+            ├── 嵌入 JSON 数据到 <script> 块：
+            │     ALL_DCF = [...估值结果...]
+            │     ALL_HISTORY = {code: [{date, close}]}
+            │     A_STOCKS / H_STOCKS = [...]
             ├── 嵌入 Plotly CDN（plotly-2.26.0.min.js）
-            ├── 自定义 CSS（渐变标题栏、卡片样式）
-            └── 四个图表 div 按顺序排列
+            ├── 嵌入 _css()：渐变标题、筛选面板、卡片样式
+            ├── 嵌入 _js()：renderAll() / renderTable() / renderUpsideBar()
+            │              renderPriceComparison() / renderPriceHistory()
+            │              selectAll() / selectNone() / selectAOnly() / selectHOnly()
+            └── 交互筛选面板 HTML：股票复选框 + 日期选择器
+
+    浏览器端交互流程：
+        用户改变复选框 / 日期
+            → renderAll()
+            → 过滤 ALL_DCF / ALL_HISTORY
+            → Plotly.react(divId, traces, layout) × 5 个图表
+            → 统计卡片数字同步更新
     │
     ▼
-data/dcf_report.html（约 140KB，独立文件，无网络依赖*）
+data/dcf_report.html（约 230KB，独立文件，无需服务器）
 * 图表渲染需要加载 Plotly CDN；如需完全离线，可将 plotly.min.js 本地化
 ```
 
