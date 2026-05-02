@@ -15,10 +15,17 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                       Layer 5 – 入口 / 调度层                     │
+│                       Layer 6 – 入口 / 调度层                     │
 │   main.py（一键运行）                                             │
-│   scripts/init_db.py  run_download.py  run_valuation.py（分步）   │
-│   src/valuation_pipeline.py（Pipeline 协调器）                    │
+│   scripts/init_db.py  run_download.py  run_valuation.py          │
+│   scripts/run_report.py  │  src/valuation_pipeline.py            │
+└────────────────────────────┬─────────────────────────────────────┘
+                             │
+┌────────────────────────────▼─────────────────────────────────────┐
+│                       Layer 5 – 可视化层                           │
+│                       src/visualizer.py                           │
+│   _chart_table()  _chart_upside_bar()  _chart_price_comparison() │
+│   _chart_price_history()  →  data/dcf_report.html（Plotly）      │
 └────────────────────────────┬─────────────────────────────────────┘
                              │
 ┌────────────────────────────▼─────────────────────────────────────┐
@@ -182,9 +189,39 @@ base_revenue（代理基准营收 = market_price × 1e8）
 
 ---
 
-### 3.5 入口 / 调度层
+### 3.5 可视化层（src/visualizer.py）
 
-**`main.py`（推荐入口）**：一键串联三个步骤，适合首次运行和日常使用。
+**职责**：从数据库读取估值结果和历史价格，使用 Plotly 生成独立交互式 HTML 报告。
+
+**输出文件**：`data/dcf_report.html`，单文件，双击用浏览器打开，无需服务器。
+
+**图表组成**：
+
+| 图表 | 类型 | 说明 |
+|------|------|------|
+| DCF 结果明细表 | Plotly Table | 含颜色区分（绿=低估，红=高估） |
+| 高低估百分比 | 水平条形图 | 绿/红双色，按幅度升序排列 |
+| 市场价 vs 内在价值 | 分组条形图 | 蓝=市场价，橙=内在价值 |
+| 历史收盘价走势 | 折线图（左右双图） | 左=A 股，右=H 股 |
+
+**主要函数**：
+
+| 函数 | 说明 |
+|------|------|
+| `generate_report()` | 主入口，查数据库 → 生成图表 → 写 HTML 文件 |
+| `_chart_table()` | 估值明细表格 |
+| `_chart_upside_bar()` | 高低估百分比水平图 |
+| `_chart_price_comparison()` | 价格对比分组图 |
+| `_chart_price_history()` | A/H 历史走势折线图 |
+| `_build_html()` | 拼装页面 HTML，嵌入 Plotly CDN 和自定义 CSS |
+
+**扩展方向**：可增加蜡烛图（K 线）、成交量、估值历史趋势、多情景对比等图表，只需在 `_build_html()` 中增加对应图表 div 即可。
+
+---
+
+### 3.6 入口 / 调度层
+
+**`main.py`（推荐入口）**：一键串联四个步骤，适合首次运行和日常使用。
 
 **`scripts/` 分步脚本**：适合调试单个阶段或在 CI/CD 中按需调用：
 
@@ -193,6 +230,7 @@ base_revenue（代理基准营收 = market_price × 1e8）
 | `scripts/init_db.py` | 建库建表（幂等） |
 | `scripts/run_download.py` | 下载 A 股 + H 股数据 |
 | `scripts/run_valuation.py` | 运行估值 Pipeline |
+| `scripts/run_report.py` | 生成可视化 HTML 报告 |
 
 **`src/valuation_pipeline.py`（Pipeline 协调器）**：合并股票池 → 批量查价 → 调用 DCFModel → 写库 → 打印汇总。生产环境可接入 Airflow / Prefect，实现每日定时触发。
 
@@ -240,4 +278,5 @@ base_revenue（代理基准营收 = market_price × 1e8）
 | 股票代码格式 | 纯数字（6位/5位） | AkShare 原生格式，避免前缀转换，A/H 两市统一处理 |
 | 配置管理 | Python 文件（settings.py） | 类型安全、IDE 自动补全、直接 import、无额外解析依赖 |
 | DCF 模型 | 简化 FCFF + Gordon Growth | 在缺乏完整财务数据时保持模型结构完整，便于未来替换输入项 |
-| 语言 | Python 3.8+ | 生态成熟，AkShare / pandas / numpy 工具链完备 |
+| 可视化 | Plotly → 独立 HTML | 无需服务器，单文件分发，图表交互功能完整 |
+| 语言 | Python 3.8+ | 生态成熟，AkShare / pandas / numpy / plotly 工具链完备 |

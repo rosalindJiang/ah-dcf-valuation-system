@@ -174,16 +174,21 @@ start = _to_akshare_date(settings.START_DATE)
 
 ```
 ah_dcf_valuation_system/
-├── main.py             # 一键入口，只做串联调用，不写业务逻辑
+├── main.py             # 一键入口（4步串联），只做调用，不写业务逻辑
 ├── config/             # 配置文件，只放参数常量，不放业务逻辑
-├── data/               # 数据文件（.db），不提交到版本库
+├── data/               # 运行产出（.db 和 .html），不提交到版本库
 ├── src/                # 核心业务模块
 │   ├── database.py         # 数据库操作（项目中唯一操作 SQLite 的文件）
 │   ├── data_downloader.py  # 数据采集（项目中唯一调用 AkShare 的文件）
 │   ├── dcf_model.py        # 估值算法（纯计算，不依赖数据库和外部 API）
 │   ├── valuation_pipeline.py # 流程编排（协调其他模块，不含计算逻辑）
+│   ├── visualizer.py       # 可视化（项目中唯一使用 Plotly 的文件）
 │   └── utils.py            # 通用工具（日志、日期校验，无业务依赖）
 ├── scripts/            # 分步可执行脚本（入口点，轻逻辑，重调用）
+│   ├── init_db.py
+│   ├── run_download.py
+│   ├── run_valuation.py
+│   └── run_report.py       # 单独生成 HTML 报告
 ├── docs/               # 设计文档
 └── tests/              # 单元测试（待扩展）
 ```
@@ -192,6 +197,7 @@ ah_dcf_valuation_system/
 - `src/database.py` 是项目中**唯一**操作 SQLite 的文件，其他模块不直接执行 SQL
 - `src/data_downloader.py` 是项目中**唯一**调用 AkShare 的文件
 - `src/dcf_model.py` 是纯计算模块，不 import database 也不 import data_downloader
+- `src/visualizer.py` 是项目中**唯一**使用 Plotly 的文件，只读数据库，不写入
 - `config/settings.py` 只放常量，禁止有副作用的代码（如网络请求、文件读写）
 
 ---
@@ -341,6 +347,7 @@ DEFAULT_WACC = float(os.getenv("DCF_WACC", "0.10"))
 | `src/database.py` | 数据工程师 | 维护 DDL、索引和查询性能 |
 | `src/dcf_model.py` | 量化研究员 | 维护 DCF 算法、参数模型和情景分析 |
 | `src/valuation_pipeline.py` | 全栈工程师 | 维护调度逻辑和并行化 |
+| `src/visualizer.py` | 全栈工程师 | 维护图表类型和报告样式 |
 | `main.py` / `scripts/` | 全栈工程师 | 维护入口和运行流程 |
 | `docs/` | 所有成员 | 每次功能变更同步更新相关文档 |
 

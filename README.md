@@ -1,6 +1,6 @@
 # AH 股 DCF 估值计算系统
 
-> 一个可扩展的全市场 A 股 + H 股 DCF（折现现金流）自动化估值系统。  
+> 一个可扩展的全市场 A 股 + H 股 DCF（折现现金流）自动化估值系统，内置交互式可视化报告。  
 > Demo 阶段以 5 只 A 股 + 5 只 H 股验证完整流程，架构设计支持扩展至全市场 5000+ 只 A 股和 2000+ 只港股。
 
 ---
@@ -9,7 +9,7 @@
 
 DCF（Discounted Cash Flow，折现现金流）是价值投资的核心估值方法之一，通过预测企业未来自由现金流并以适当折现率折现，得出股票内在价值，从而判断其相对市场价格是否被高估或低估。
 
-本系统旨在自动化这一流程：通过 AkShare 免费接口同时采集 A 股和 H 股真实历史行情数据，基于统一的参数配置进行批量 DCF 估值，将结果持久化至本地 SQLite 数据库，为投资决策提供量化参考。
+本系统旨在自动化这一流程：通过 AkShare 免费接口同时采集 A 股和 H 股真实历史行情数据，基于统一的参数配置进行批量 DCF 估值，将结果持久化至本地 SQLite 数据库，并生成包含多张交互式图表的 HTML 可视化报告。
 
 ---
 
@@ -18,6 +18,7 @@ DCF（Discounted Cash Flow，折现现金流）是价值投资的核心估值方
 - 通过统一数据接口（AkShare）自动化采集 A 股和 H 股真实历史行情
 - 基于 DCF 模型批量计算股票内在价值
 - 将估值结果存储于本地 SQLite 数据库，支持历史查询和追溯
+- 生成交互式 HTML 可视化报告，直观呈现估值结果
 - 系统架构支持从 demo（5+5 只股票）平滑扩展至全市场（7000+ 只）
 
 ---
@@ -45,7 +46,8 @@ DCF（Discounted Cash Flow，折现现金流）是价值投资的核心估值方
           读取股票池 → 批量估值 → 结果入库 → 打印汇总
                         │
                         ▼
-        dcf_valuation_results 表（估值结果持久化）
+        可视化层（src/visualizer.py）
+          高低估图 │ 价值对比图 │ 走势图 → data/dcf_report.html
 ```
 
 详细架构说明见 [docs/architecture_design.md](docs/architecture_design.md)
@@ -67,10 +69,24 @@ DCF 模型计算（FCFF + Terminal Value + WACC 折现）
     ↓
 dcf_valuation_results 表（估值结果 + 参数快照）
     ↓
-命令行汇总输出 / SQL 查询
+Plotly 生成交互式 HTML 报告（data/dcf_report.html）
 ```
 
 详细数据流说明见 [docs/data_flow.md](docs/data_flow.md)
+
+---
+
+## 可视化报告
+
+运行后自动生成 `data/dcf_report.html`，用浏览器打开即可查看：
+
+| 模块 | 内容 |
+|------|------|
+| 顶部统计卡片 | 估值总数、低估数量、高估数量、平均高低估幅度 |
+| DCF 结果明细表 | 股票代码、市场价、内在价值、高低估%、WACC、综合评级，行颜色区分 |
+| 高低估百分比图 | 水平条形图，绿=低估，红=高估，按幅度排序 |
+| 价值对比图 | 市场价 vs DCF 内在价值分组条形图 |
+| 历史走势图 | A 股 / H 股历史收盘价折线图（左右双图） |
 
 ---
 
@@ -102,8 +118,6 @@ Intrinsic Value = Enterprise Value / 虚拟股本数
 ```
 
 **⚠️ Demo 限制说明**
-
-当前版本为简化 DCF，存在以下限制：
 
 | 限制项 | 当前处理 | 生产环境应改为 |
 |--------|----------|---------------|
@@ -168,9 +182,10 @@ pip install -r requirements.txt
 ```
 
 `requirements.txt` 包含：
-- `akshare` — A 股和 H 股数据接口（统一数据源，无需注册）
+- `akshare` — A 股和 H 股数据接口
 - `pandas` — 数据处理
 - `numpy` — 数值计算
+- `plotly` — 交互式可视化图表
 
 ### 2. 一键运行（推荐）
 
@@ -178,52 +193,53 @@ pip install -r requirements.txt
 python main.py
 ```
 
-`main.py` 会自动按顺序执行：初始化数据库 → 下载数据 → DCF 估值。
+自动按顺序执行：初始化数据库 → 下载数据 → DCF 估值 → 生成可视化报告。
 
 **预期输出**：
 ```
 [INFO] AH 股 DCF 估值系统启动
-[INFO] 步骤 1/3：初始化数据库
-[INFO] 数据库表初始化完成：stock_prices, financial_assumptions, dcf_valuation_results
-[INFO] 步骤 2/3：下载 A 股数据（AkShare）
-[INFO] 下载 A 股 600519 ...
+[INFO] 步骤 1/4：初始化数据库
+[INFO] 步骤 2/4：下载 A 股数据（AkShare）
 [INFO]   600519：写入 484 条记录
 ...
-[INFO] 步骤 2/3：下载 H 股数据（AkShare）
-[INFO] 下载 H 股 00700 ...
+[INFO] 步骤 2/4：下载 H 股数据（AkShare）
 [INFO]   00700：写入 489 条记录
 ...
-[INFO] 步骤 3/3：运行 DCF 估值 Pipeline
+[INFO] 步骤 3/4：运行 DCF 估值 Pipeline
 
 ================================================================================
                              DCF 估值结果汇总
 ================================================================================
-股票代码                  市场价       内在价值       高低估(%)         估值日期
---------------------------------------------------------------------------------
 600000              10.29     217.90    +2017.6%    2024-12-31  ▲低估
 000001              11.70     217.90    +1762.4%    2024-12-31  ▲低估
-02318               46.05     217.90     +373.2%    2024-12-31  ▲低估
-601318              52.65     217.90     +313.9%    2024-12-31  ▲低估
-01299               56.30     217.90     +287.0%    2024-12-31  ▲低估
-00005               75.80     217.90     +187.5%    2024-12-31  ▲低估
-00941               76.60     217.90     +184.5%    2024-12-31  ▲低估
-000858             140.04     217.90      +55.6%    2024-12-31  ▲低估
+...
 00700              417.00     217.90      -47.8%    2024-12-31  ▼高估
 600519            1524.00     217.90      -85.7%    2024-12-31  ▼高估
 ================================================================================
-  完成 10 只，跳过 0 只
-  注意：当前为 demo 简化 DCF，估值仅供参考，不构成投资建议。
-================================================================================
+
+[INFO] 步骤 4/4：生成可视化 HTML 报告
+[INFO] 报告已生成，请用浏览器打开：data/dcf_report.html
 ```
 
 ### 3. 分步运行（可选）
-
-如需单独控制每个阶段：
 
 ```bash
 python scripts/init_db.py       # 初始化数据库
 python scripts/run_download.py  # 下载行情数据
 python scripts/run_valuation.py # 运行 DCF 估值
+python scripts/run_report.py    # 生成可视化报告
+```
+
+---
+
+## 查看可视化报告
+
+用任意浏览器打开 `data/dcf_report.html`，无需网络，无需服务器：
+
+```bash
+open data/dcf_report.html        # macOS
+start data/dcf_report.html       # Windows
+xdg-open data/dcf_report.html    # Linux
 ```
 
 ---
@@ -245,11 +261,6 @@ SELECT trade_date, close FROM stock_prices
 WHERE stock_code = '600519'
 ORDER BY trade_date DESC LIMIT 5;
 
--- 查看腾讯最近 5 条收盘价（H 股）
-SELECT trade_date, close FROM stock_prices
-WHERE stock_code = '00700'
-ORDER BY trade_date DESC LIMIT 5;
-
 -- 查看数据来源分布
 SELECT source, COUNT(*) as cnt FROM stock_prices GROUP BY source;
 ```
@@ -259,7 +270,7 @@ SELECT source, COUNT(*) as cnt FROM stock_prices GROUP BY source;
 ## 当前 Demo 的限制
 
 1. **股票池规模**：A 股 5 只、H 股 5 只，可在 `config/settings.py` 中扩展
-2. **DCF 参数**：全部使用统一假设，未按公司/行业差异化（导致内在价值趋同）
+2. **DCF 参数**：全部使用统一假设，未按公司/行业差异化
 3. **财务数据**：无真实报表，基准营收为市价×虚拟规模的代理值
 4. **数据库**：SQLite 适合单机，不支持高并发；全市场版本建议迁移至 PostgreSQL
 
@@ -269,14 +280,14 @@ SELECT source, COUNT(*) as cnt FROM stock_prices GROUP BY source;
 
 | 方向 | 具体内容 |
 |------|----------|
-| 全市场 A 股 | `ak.stock_info_a_code_name()` 获取全量代码，写入 `A_SHARE_STOCKS`，下载逻辑无需改动 |
+| 全市场 A 股 | `ak.stock_info_a_code_name()` 获取全量代码，填入 `A_SHARE_STOCKS` |
 | 全市场 H 股 | `ak.stock_hk_spot_em()` 获取全量港股代码 |
-| 完整财务数据 | AkShare 提供财务报表接口（`ak.stock_financial_report_sina`），可替换虚拟营收 |
-| 行业化 WACC | 按申万/证监会行业分类，构建行业 WACC 矩阵，`DCFAssumptions` 按行业实例化 |
-| 情景分析 | 蒙特卡洛模拟，对 WACC、增长率采样，输出悲观/基准/乐观三情景估值区间 |
+| 完整财务数据 | AkShare 财务报表接口替换虚拟营收，提升 DCF 准确性 |
+| 行业化 WACC | 按申万/证监会行业分类，构建行业 WACC 矩阵 |
+| 情景分析 | 蒙特卡洛模拟，输出悲观/基准/乐观三情景估值区间 |
 | 自动化调度 | 接入 Airflow / cron，每日盘后自动触发 `main.py` |
-| API 服务 | 用 FastAPI 封装估值查询接口，供前端或其他系统调用 |
-| 相对估值补充 | 引入 PEG、EV/EBITDA 等指标作为 DCF 的辅助验证 |
+| 报告增强 | 可视化增加蜡烛图、成交量柱、估值历史趋势等 |
+| API 服务 | FastAPI 封装估值查询接口，供前端或其他系统调用 |
 
 ---
 
@@ -285,24 +296,27 @@ SELECT source, COUNT(*) as cnt FROM stock_prices GROUP BY source;
 ```
 ah_dcf_valuation_system/
 ├── main.py                       # 一键运行入口（推荐）
-├── README.md                     # 项目说明
-├── requirements.txt              # Python 依赖（akshare, pandas, numpy）
+├── README.md
+├── requirements.txt              # akshare, pandas, numpy, plotly
 ├── .gitignore
 ├── config/
 │   └── settings.py               # 全局配置（股票池、日期、DCF 参数）
 ├── data/
-│   └── ah_dcf.db                 # SQLite 数据库（运行后生成，不提交到版本库）
+│   ├── ah_dcf.db                 # SQLite 数据库（运行后生成，不提交到版本库）
+│   └── dcf_report.html           # 可视化报告（运行后生成，不提交到版本库）
 ├── src/
 │   ├── __init__.py
 │   ├── database.py               # 数据库连接、建表、读写（唯一 SQL 入口）
 │   ├── data_downloader.py        # A 股 / H 股数据采集（AkShare）
 │   ├── dcf_model.py              # DCF 估值算法（DCFModel 类）
 │   ├── valuation_pipeline.py     # 估值流程编排
+│   ├── visualizer.py             # 可视化报告生成（Plotly → HTML）
 │   └── utils.py                  # 通用工具（日志初始化、日期校验）
 ├── scripts/
 │   ├── init_db.py                # 单独初始化数据库
 │   ├── run_download.py           # 单独运行数据下载
-│   └── run_valuation.py          # 单独运行估值计算
+│   ├── run_valuation.py          # 单独运行估值计算
+│   └── run_report.py             # 单独生成可视化报告
 └── docs/
     ├── architecture_design.md    # 系统架构设计
     ├── data_flow.md              # 数据流程说明

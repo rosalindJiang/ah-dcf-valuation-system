@@ -237,9 +237,58 @@ for each stock_code:
 
 ---
 
-### Phase 5 — 结果查询与投资参考
+### Phase 5 — 可视化报告生成
 
-**方式 A：命令行输出（run_valuation.py / main.py 自动打印）**
+**入口**：`main.py` Step 4 / `scripts/run_report.py`  
+**调用链**：`generate_report()` → 四个图表函数 → `_build_html()` → 写入 HTML 文件
+
+**数据流**：
+
+```
+database.query_all_dcf_results()
+    │  SELECT * FROM dcf_valuation_results ORDER BY upside_downside_pct DESC
+    │
+    ▼
+results（估值结果列表）
+    │
+    ├─① _chart_table(results)
+    │       go.Table：股票代码、市场价、内在价值、高低估%、WACC、评级
+    │       行颜色：高低估 ≥10% → 绿；≤-10% → 红；其他 → 白
+    │
+    ├─② _chart_upside_bar(results)
+    │       go.Bar（horizontal）：高低估% 水平图
+    │       颜色：正值=绿(#27ae60)，负值=红(#e74c3c)
+    │       按百分比升序排列，零轴竖线标注
+    │
+    ├─③ _chart_price_comparison(results)
+    │       go.Bar（grouped）：市场价(蓝) vs 内在价值(橙)
+    │
+    ├─④ _chart_price_history()
+    │       database.query_price_history(code) × 10只
+    │       make_subplots(1×2)：左=A股折线，右=H股折线
+    │
+    └─⑤ _build_html(results, charts...)
+            ├── 顶部统计卡片（总数/低估数/高估数/平均幅度）
+            ├── 嵌入 Plotly CDN（plotly-2.26.0.min.js）
+            ├── 自定义 CSS（渐变标题栏、卡片样式）
+            └── 四个图表 div 按顺序排列
+    │
+    ▼
+data/dcf_report.html（约 140KB，独立文件，无网络依赖*）
+* 图表渲染需要加载 Plotly CDN；如需完全离线，可将 plotly.min.js 本地化
+```
+
+---
+
+### Phase 6 — 结果查询与投资参考
+
+**方式 A：HTML 可视化报告（run_report.py / main.py 自动生成）**
+
+```
+open data/dcf_report.html   # 浏览器打开，查看交互式图表
+```
+
+**方式 B：命令行输出（run_valuation.py / main.py 自动打印）**
 
 ```
 ================================================================================
@@ -262,7 +311,7 @@ for each stock_code:
 ================================================================================
 ```
 
-**方式 B：直接查询 SQLite**
+**方式 C：直接查询 SQLite**
 
 ```sql
 -- 查看所有估值结果（按高低估排序）
@@ -289,7 +338,14 @@ WHERE stock_code = '600519';
 
 ---
 
-## 3. 数据质量控制
+## 3. 数据质量与文件输出
+
+| 产出文件 | 路径 | 说明 |
+|----------|------|------|
+| 数据库 | `data/ah_dcf.db` | 行情数据 + 估值结果，不提交到版本库 |
+| 可视化报告 | `data/dcf_report.html` | Plotly 交互式 HTML，不提交到版本库 |
+
+## 4. 数据质量控制
 
 | 环节 | 控制措施 |
 |------|----------|
