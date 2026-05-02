@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS stock_prices (
     close       REAL,
     volume      REAL,
     amount      REAL,
-    source      TEXT    DEFAULT 'baostock',
+    source      TEXT,
     created_at  TEXT    DEFAULT (datetime('now', 'localtime')),
     UNIQUE (stock_code, trade_date)
 )

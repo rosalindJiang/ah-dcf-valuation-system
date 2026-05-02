@@ -397,8 +397,8 @@ def _build_html(results: List[Dict]) -> str:
 <div class="container">
 
   <div class="disclaimer">
-    ⚠️ <strong>免责声明：</strong>本报告为 Demo 简化 DCF 估值，基准营收使用虚拟代理数据（市场价 × 1亿），
-    WACC 采用统一默认参数，未接入真实财务报表。估值结果仅供学习和系统验证，<strong>不构成任何投资建议</strong>。
+    ⚠️ <strong>免责声明：</strong>本报告为 Demo 简化 DCF 估值，基准营收和总股本来自年报近似值（config/settings.py STOCK_FINANCIALS），
+    WACC 按行业手工设定，未接入实时财务报表，净负债未扣减。估值结果仅供学习和系统验证，<strong>不构成任何投资建议</strong>。
   </div>
 
   <div class="chart-card">{c_table}</div>

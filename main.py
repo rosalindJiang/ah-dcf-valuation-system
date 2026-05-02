@@ -47,7 +47,7 @@ def main():
     except Exception as e:
         logger.error("A 股下载失败：%s", e)
 
-    logger.info("步骤 2/4：下载 H 股数据（AkShare）")
+    logger.info("步骤 2/4：下载 H 股数据（AkShare）（续）")
     try:
         download_hk_stock_data()
     except Exception as e:

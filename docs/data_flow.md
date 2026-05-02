@@ -43,7 +43,12 @@ config/settings.py
     ├── START_DATE = "2023-01-01"
     ├── END_DATE   = "2024-12-31"
     ├── DB_PATH    = "<project_root>/data/ah_dcf.db"
-    └── DCF 参数（DEFAULT_WACC=0.10, TERMINAL_GROWTH_RATE=0.03, ...）
+    ├── DCF 全局参数（DEFAULT_WACC=0.10, TERMINAL_GROWTH_RATE=0.03, ...）
+    └── STOCK_FINANCIALS = {
+            "600519": {"revenue": 150_300_000_000, "shares": 1_256_197_800,
+                       "wacc": 0.08, "revenue_growth_rate": 0.12},
+            ...（10 只股票各自的真实年报营收、总股本、WACC 和增长率）
+        }
             │
             ▼
     各模块 import settings → 直接使用常量
@@ -199,14 +204,19 @@ for each stock_code:
     │                   ▼
     │         latest_market_price（最新收盘价，元或港元）
     │
-    ├─②  DCFAssumptions()  # 从 settings 读取全部 DCF 参数，封装为 dataclass
+    ├─②  fin = STOCK_FINANCIALS.get(stock_code, {})
+    │         DCFAssumptions(
+    │             wacc               = fin.get("wacc", DEFAULT_WACC),
+    │             revenue_growth_rate= fin.get("revenue_growth_rate", REVENUE_GROWTH_RATE),
+    │         )         # 其余参数继续使用全局 settings 默认值
     │
-    ├─③  DCFModel(stock_code, market_price, assumptions)
+    ├─③  DCFModel(stock_code, market_price, assumptions,
+    │             base_revenue=fin["revenue"], total_shares=fin["shares"])
     │         │
     │         ├── forecast_free_cash_flow()
-    │         │       base_revenue = market_price × 1e8（虚拟代理）
+    │         │       base_revenue = fin["revenue"]（年报近似营收，非虚拟代理）
     │         │       for t in 1..N:
-    │         │           revenue  *= (1 + REVENUE_GROWTH_RATE)
+    │         │           revenue  *= (1 + revenue_growth_rate)
     │         │           nopat     = revenue × OPERATING_MARGIN × (1 - TAX_RATE)
     │         │           da        = revenue × DEPRECIATION_RATIO
     │         │           capex     = revenue × CAPEX_RATIO
@@ -221,8 +231,8 @@ for each stock_code:
     │         │       EV = Σ[FCFF_t / (1+WACC)^t] + TV / (1+WACC)^N
     │         │
     │         └── calculate_intrinsic_value(EV)
-    │                 virtual_shares  = base_revenue / 100
-    │                 intrinsic_value = EV / virtual_shares
+    │                 total_shares    = fin["shares"]（年报近似总股本）
+    │                 intrinsic_value = EV / total_shares
     │                 upside_pct      = (intrinsic - market_price) / market_price × 100%
     │
     └─④  database.upsert_dcf_result(result)
@@ -246,7 +256,7 @@ for each stock_code:
 
 ```
 database.query_all_dcf_results()
-    │  SELECT * FROM dcf_valuation_results ORDER BY upside_downside_pct DESC
+    │  每只股票取 MAX(valuation_date) 最新一条，按 upside_downside_pct DESC 排序
     │
     ▼
 results（估值结果列表）
@@ -294,20 +304,21 @@ open data/dcf_report.html   # 浏览器打开，查看交互式图表
 ================================================================================
                              DCF 估值结果汇总
 ================================================================================
-股票代码                  市场价       内在价值       高低估(%)         估值日期
+股票代码           市场价       内在价值    高低估(%)     估值日期       判断
 --------------------------------------------------------------------------------
-600000              10.29     217.90    +2017.6%    2024-12-31  ▲低估
-000001              11.70     217.90    +1762.4%    2024-12-31  ▲低估
-02318               46.05     217.90     +373.2%    2024-12-31  ▲低估
-601318              52.65     217.90     +313.9%    2024-12-31  ▲低估
-01299               56.30     217.90     +287.0%    2024-12-31  ▲低估
-00005               75.80     217.90     +187.5%    2024-12-31  ▲低估
-00941               76.60     217.90     +184.5%    2024-12-31  ▲低估
-000858             140.04     217.90      +55.6%    2024-12-31  ▲低估
-00700              417.00     217.90      -47.8%    2024-12-31  ▼高估
-600519            1524.00     217.90      -85.7%    2024-12-31  ▼高估
+02318           49.27      112.06    +127.5%    2026-05-02  ▲低估
+601318          64.02      112.06     +75.0%    2026-05-02  ▲低估
+00941           95.64      105.89     +10.7%    2026-05-02  ▲低估
+01299           36.27       35.59      -1.9%    2026-05-02  →合理
+00005           56.67       51.15      -9.7%    2026-05-02  →合理
+000001          21.05       13.63     -35.2%    2026-05-02  ▼高估
+600000          20.23        9.58     -52.6%    2026-05-02  ▼高估
+000858         169.37       73.84     -56.4%    2026-05-02  ▼高估
+600519        1699.48      434.92     -74.4%    2026-05-02  ▼高估
+00700          458.57      115.98     -74.7%    2026-05-02  ▼高估
 ================================================================================
   完成 10 只，跳过 0 只
+  注意：当前为 demo 简化 DCF，估值仅供参考，不构成投资建议。
 ================================================================================
 ```
 

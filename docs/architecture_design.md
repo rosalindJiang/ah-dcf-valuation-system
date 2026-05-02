@@ -56,7 +56,7 @@
 ┌──────────▼──────────────────────────────────────────▼───────────┐
 │                       Layer 1 – 配置层                            │
 │                       config/settings.py                          │
-│   A_SHARE_STOCKS（6位纯数字）  H_SHARE_STOCKS（5位纯数字）        │
+│   A_SHARE_STOCKS（6位）  H_SHARE_STOCKS（5位）  STOCK_FINANCIALS  │
 │   START_DATE / END_DATE  │  DB_PATH  │  DCF 参数  │  LOG_LEVEL   │
 └──────────────────────────────────────────────────────────────────┘
 ```

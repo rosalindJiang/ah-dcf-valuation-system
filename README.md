@@ -57,17 +57,17 @@ DCF（Discounted Cash Flow，折现现金流）是价值投资的核心估值方
 ## 数据流程
 
 ```
-settings.py（股票池 + 日期 + DCF 参数）
+settings.py（股票池 + 日期 + STOCK_FINANCIALS + DCF 全局参数）
     ↓
 AkShare 下载 A 股 + H 股真实日线行情
     ↓
 stock_prices 表（SQLite，source = akshare_a / akshare_hk）
     ↓
-读取最新收盘价
+读取各股最新收盘价 + 从 STOCK_FINANCIALS 读取营收 / 股本 / WACC
     ↓
-DCF 模型计算（FCFF + Terminal Value + WACC 折现）
+DCF 模型计算（FCFF + Terminal Value + WACC 折现 → EV / 总股本）
     ↓
-dcf_valuation_results 表（估值结果 + 参数快照）
+dcf_valuation_results 表（估值结果 + 参数快照，每股仅保留最新一条）
     ↓
 Plotly 生成交互式 HTML 报告（data/dcf_report.html）
 ```

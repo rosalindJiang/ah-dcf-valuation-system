@@ -20,18 +20,8 @@ from src import database
 
 logger = logging.getLogger(__name__)
 
-# AkShare 返回的列名 → 统一内部字段名
-_A_SHARE_COL_MAP = {
-    "日期": "trade_date",
-    "开盘": "open",
-    "最高": "high",
-    "最低": "low",
-    "收盘": "close",
-    "成交量": "volume",
-    "成交额": "amount",
-}
-
-_H_SHARE_COL_MAP = {
+# AkShare 返回的列名 → 统一内部字段名（A 股和 H 股列名相同，共用同一映射）
+_AKSHARE_COL_MAP = {
     "日期": "trade_date",
     "开盘": "open",
     "最高": "high",
@@ -120,7 +110,7 @@ def _download_single_a_share(
             logger.warning("  %s：未获取到数据（可能代码错误或停牌）", stock_code)
             return
 
-        records = _parse_akshare_df(df, stock_code, _A_SHARE_COL_MAP, source="akshare_a")
+        records = _parse_akshare_df(df, stock_code, _AKSHARE_COL_MAP, source="akshare_a")
         if records:
             database.upsert_stock_prices(records, db_path)
             logger.info("  %s：写入 %d 条记录", stock_code, len(records))
@@ -198,7 +188,7 @@ def _download_single_hk_share(
             logger.warning("  %s：未获取到数据（可能代码错误或停牌）", stock_code)
             return
 
-        records = _parse_akshare_df(df, stock_code, _H_SHARE_COL_MAP, source="akshare_hk")
+        records = _parse_akshare_df(df, stock_code, _AKSHARE_COL_MAP, source="akshare_hk")
         if records:
             database.upsert_stock_prices(records, db_path)
             logger.info("  %s：写入 %d 条记录", stock_code, len(records))
