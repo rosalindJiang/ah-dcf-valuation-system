@@ -266,20 +266,28 @@ def query_price_history(
 
 def query_all_dcf_results(db_path: str = None) -> List[Dict[str, Any]]:
     """
-    查询所有 DCF 估值结果，按 upside_downside_pct 降序排列（高低估排序）。
+    查询每只股票最新一次的 DCF 估值结果，按 upside_downside_pct 降序排列。
+
+    每只股票只保留 valuation_date 最大的那条记录，避免历史运行数据混入图表。
 
     Args:
         db_path: 数据库路径。
 
     Returns:
-        DCF 估值结果列表。
+        每只股票最新 DCF 估值结果列表。
     """
     sql = """
-        SELECT stock_code, valuation_date, forecast_years, wacc,
-               terminal_growth_rate, estimated_intrinsic_value,
-               latest_market_price, upside_downside_pct
-        FROM dcf_valuation_results
-        ORDER BY upside_downside_pct DESC
+        SELECT r.stock_code, r.valuation_date, r.forecast_years, r.wacc,
+               r.terminal_growth_rate, r.estimated_intrinsic_value,
+               r.latest_market_price, r.upside_downside_pct
+        FROM dcf_valuation_results r
+        INNER JOIN (
+            SELECT stock_code, MAX(valuation_date) AS max_date
+            FROM dcf_valuation_results
+            GROUP BY stock_code
+        ) latest ON r.stock_code = latest.stock_code
+                AND r.valuation_date = latest.max_date
+        ORDER BY r.upside_downside_pct DESC
     """
     conn = get_connection(db_path)
     try:
