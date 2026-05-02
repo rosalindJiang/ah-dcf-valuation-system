@@ -75,7 +75,8 @@
 | `H_SHARE_STOCKS` | `["00700", "00941", ...]` | H 股股票池，AkShare 格式（5位纯数字） |
 | `START_DATE` / `END_DATE` | `"YYYY-MM-DD"` | 历史数据下载日期范围 |
 | `DB_PATH` | 绝对路径 | SQLite 数据库文件路径（由 BASE_DIR 动态拼接） |
-| DCF 参数 | `float` / `int` | WACC、终端增长率、预测年数、利润率等 |
+| DCF 全局参数 | `float` / `int` | WACC、终端增长率、预测年数、利润率等默认值 |
+| `STOCK_FINANCIALS` | `dict[str, dict]` | 各股票年报近似营收、总股本、WACC 和增长率覆盖值 |
 
 **扩展方式**：生产环境可将常量替换为从 YAML 文件、数据库或环境变量读取，实现动态配置：
 
@@ -159,32 +160,37 @@ all_hk_codes = df_hk["代码"].tolist()     # 写入 settings.H_SHARE_STOCKS
 `DCFModel`：接收 `stock_code`、`market_price`、`DCFAssumptions`，执行四步估值：
 
 ```
-base_revenue（代理基准营收 = market_price × 1e8）
+STOCK_FINANCIALS[stock_code]（营收、总股本、WACC、增长率）
     │
-    ├─ Step 1: forecast_free_cash_flow()
-    │     逐年营收增长 → NOPAT + D&A - CapEx - △WC
-    │     返回 [FCFF_1, FCFF_2, ..., FCFF_N]
+    ├─ valuation_pipeline._valuate_single()
+    │     读取个股财务数据 → 构建 DCFAssumptions → 实例化 DCFModel
     │
-    ├─ Step 2: calculate_terminal_value(FCFF_N)
-    │     TV = FCFF_N × (1 + g) / (WACC - g)
-    │
-    ├─ Step 3: discount_cash_flows(fcff_list, TV)
-    │     EV = Σ[FCFF_t / (1+WACC)^t] + TV / (1+WACC)^N
-    │
-    └─ Step 4: calculate_intrinsic_value(EV)
-          intrinsic_value = EV / virtual_shares
-          upside_pct = (intrinsic - market_price) / market_price × 100%
+    └─ DCFModel（stock_code, market_price, assumptions, base_revenue, total_shares）
+          │
+          ├─ Step 1: forecast_free_cash_flow()
+          │     逐年营收增长 → NOPAT + D&A - CapEx - △WC
+          │     返回 [FCFF_1, FCFF_2, ..., FCFF_N]
+          │
+          ├─ Step 2: calculate_terminal_value(FCFF_N)
+          │     TV = FCFF_N × (1 + g) / (WACC - g)
+          │
+          ├─ Step 3: discount_cash_flows(fcff_list, TV)
+          │     EV = Σ[FCFF_t / (1+WACC)^t] + TV / (1+WACC)^N
+          │
+          └─ Step 4: calculate_intrinsic_value(EV)
+                intrinsic_value = EV / total_shares（优先使用真实股本）
+                upside_pct = (intrinsic - market_price) / market_price × 100%
 ```
 
 **Demo 限制与生产升级路径**：
 
 | 项目 | Demo 简化 | 生产改进 |
 |------|-----------|----------|
-| 基准营收 | 市价 × 1亿（虚拟代理） | 真实财务报表营收 |
-| WACC | 固定默认值 0.10 | CAPM：Rf + β×(Rm-Rf) + 资本结构加权 |
-| 增长率 | 统一假设 | 分析师一致预期 / 行业基准 |
-| 股本 | 虚拟推导 | 真实总股本 |
-| 净负债 | 忽略 | 接入资产负债表 |
+| 基准营收 | 年报近似值（STOCK_FINANCIALS） | AkShare 财务报表接口实时获取 |
+| WACC | 按行业手工设定（STOCK_FINANCIALS） | CAPM：Rf + β×(Rm-Rf) + 资本结构加权 |
+| 增长率 | 按股票手工估计 | 分析师一致预期 / 行业基准 |
+| 股本 | 年报近似总股本 | 与当日实际流通股本同步 |
+| 净负债 | 忽略（EV≈股权价值） | 接入资产负债表（EV - 净负债） |
 | 情景分析 | 单一基准 | 悲观 / 基准 / 乐观三情景 |
 
 ---

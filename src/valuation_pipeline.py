@@ -78,11 +78,17 @@ def _valuate_single(stock_code: str, db_path: Optional[str]) -> Optional[dict]:
         logger.warning("%s：收盘价无效（%.4f），跳过估值", stock_code, market_price or 0)
         return None
 
-    # 构建假设参数（此处使用全局默认，生产环境可按股票/行业覆盖）
-    assumptions = DCFAssumptions()
+    # 读取个股财务基础数据，覆盖全局默认参数
+    fin = settings.STOCK_FINANCIALS.get(stock_code, {})
+    assumptions = DCFAssumptions(
+        wacc=fin.get("wacc", settings.DEFAULT_WACC),
+        revenue_growth_rate=fin.get("revenue_growth_rate", settings.REVENUE_GROWTH_RATE),
+    )
+    base_revenue = fin.get("revenue")       # None 时 DCFModel 回退到虚拟代理值
+    total_shares = fin.get("shares")        # None 时 DCFModel 回退到虚拟代理值
 
     # 运行 DCF 估值
-    model  = DCFModel(stock_code, market_price, assumptions)
+    model  = DCFModel(stock_code, market_price, assumptions, base_revenue, total_shares)
     result = model.run_valuation()
 
     # 写入数据库

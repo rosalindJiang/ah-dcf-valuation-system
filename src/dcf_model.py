@@ -80,23 +80,23 @@ class DCFModel:
         market_price: float,
         assumptions: DCFAssumptions = None,
         base_revenue: float = None,
+        total_shares: float = None,
     ):
         """
         Args:
             stock_code:    股票代码，仅用于日志和结果标记。
             market_price:  最新市场收盘价（元 / 港元）。
             assumptions:   DCFAssumptions 实例，默认使用全局参数。
-            base_revenue:  基准年营收（元）。
-                           demo 中以 market_price * 1e8 作为代理（虚拟规模）；
-                           生产环境应传入真实营收数据。
+            base_revenue:  基准年营收（元）。传入真实财报营收；
+                           未传入时以 market_price * 1e8 作为虚拟代理。
+            total_shares:  总股本（股）。传入真实股本数；
+                           未传入时以 base_revenue / 100 作为虚拟代理。
         """
         self.stock_code   = stock_code
         self.market_price = market_price
         self.assum        = assumptions or DCFAssumptions()
-
-        # demo 代理基准营收：用市场价格 × 1亿 作为虚构规模基础
-        # 实际使用时应替换为真实财报营收数据
         self.base_revenue = base_revenue or (market_price * 1e8)
+        self.total_shares = total_shares
 
         if self.assum.wacc <= self.assum.terminal_growth_rate:
             raise ValueError(
@@ -199,10 +199,9 @@ class DCFModel:
         """
         将企业价值（EV）转换为每股内在价值。
 
-        demo 简化：假设虚拟股本为 1 亿股，EV 直接除以股本得到每股价值。
-        生产环境：应接入真实股本数（total_shares）、净负债（net_debt）：
-            equity_value    = EV - net_debt
-            intrinsic_value = equity_value / total_shares
+        当 total_shares 已提供时使用真实股本；否则回退到虚拟代理公式。
+        demo 简化：暂不扣减净负债（net_debt），EV 直接视为股权价值。
+        生产环境：equity_value = EV - net_debt；intrinsic_value = equity_value / total_shares
 
         Args:
             enterprise_value: 企业总价值（元）。
@@ -210,9 +209,12 @@ class DCFModel:
         Returns:
             每股内在价值（元 / 港元）。
         """
-        # demo：虚拟股本 = base_revenue / 100（使结果与市场价在同一数量级）
-        virtual_shares = self.base_revenue / 100
-        intrinsic_value = enterprise_value / virtual_shares
+        if self.total_shares and self.total_shares > 0:
+            shares = self.total_shares
+        else:
+            # 虚拟代理：仅在无真实股本时使用，结果不具跨股票可比性
+            shares = self.base_revenue / 100
+        intrinsic_value = enterprise_value / shares
         return round(intrinsic_value, 4)
 
     # ── 主入口 ────────────────────────────────
