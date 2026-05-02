@@ -219,9 +219,12 @@ class DCFModel:
 
     # ── 主入口 ────────────────────────────────
 
-    def run_valuation(self) -> Dict[str, Any]:
+    def run_valuation(self, valuation_date: str = None) -> Dict[str, Any]:
         """
         执行完整 DCF 估值流程，返回结构化结果字典。
+
+        Args:
+            valuation_date: 估值日期字符串（YYYY-MM-DD），默认为今天。
 
         Returns:
             包含以下字段的字典（与 dcf_valuation_results 表结构对应）：
@@ -231,7 +234,7 @@ class DCFModel:
         """
         from datetime import date
 
-        logger.info("开始估值：%s（市场价=%.2f）", self.stock_code, self.market_price)
+        logger.info("开始估值：%s（市场价=%.2f，估值日期=%s）", self.stock_code, self.market_price, valuation_date or date.today().isoformat())
 
         # Step 1: 预测现金流
         fcff_list = self.forecast_free_cash_flow()
@@ -250,7 +253,7 @@ class DCFModel:
 
         result = {
             "stock_code":               self.stock_code,
-            "valuation_date":           date.today().isoformat(),
+            "valuation_date":           valuation_date or date.today().isoformat(),
             "forecast_years":           self.assum.forecast_years,
             "wacc":                     self.assum.wacc,
             "terminal_growth_rate":     self.assum.terminal_growth_rate,

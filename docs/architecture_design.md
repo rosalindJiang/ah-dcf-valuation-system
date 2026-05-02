@@ -8,6 +8,7 @@
 - **统一数据源**：A 股和 H 股均通过 AkShare 接口采集，无需注册账号，接口风格一致。
 - **模块化分层**：数据采集、存储、计算、调度各自独立，可单独替换或升级。
 - **参数化配置**：所有可调参数集中于 `config/settings.py`，零硬编码。
+- **双模式入口**：Web 应用（`app.py`）提供交互式选股 + 实时计算；命令行（`main.py`）提供一键批量运行。
 
 ---
 
@@ -15,30 +16,43 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                       Layer 6 – 入口 / 调度层                     │
-│   main.py（一键运行）                                             │
-│   scripts/init_db.py  run_download.py  run_valuation.py          │
-│   scripts/run_report.py  │  src/valuation_pipeline.py            │
-└────────────────────────────┬─────────────────────────────────────┘
-                             │
-┌────────────────────────────▼─────────────────────────────────────┐
-│                       Layer 5 – 可视化层                           │
-│                       src/visualizer.py                           │
-│   _chart_table()  _chart_upside_bar()  _chart_price_comparison() │
-│   _chart_price_history()  →  data/dcf_report.html（Plotly）      │
-└────────────────────────────┬─────────────────────────────────────┘
+│                    Layer 7 – 入口 / 调度层                        │
+│                                                                    │
+│   app.py（Web 应用，推荐）          main.py（命令行一键运行）      │
+│   └─ GET  /  → templates/index.html  └─ Step1: init_tables()      │
+│   └─ POST /api/run → JSON 响应        Step2: download_*()          │
+│                                       Step3: run_pipeline()        │
+│   scripts/init_db.py  run_download.py  run_valuation.py           │
+│   scripts/run_report.py  │  src/valuation_pipeline.py             │
+└──────────┬─────────────────────────────────────┬──────────────────┘
+           │ (Web 路由返回 JSON)                  │ (命令行调用)
+┌──────────▼──────────────────┐      ┌────────────▼─────────────────┐
+│  Layer 6a – Web 展示层       │      │  Layer 6b – 静态报告层        │
+│  templates/index.html        │      │  src/visualizer.py           │
+│  Plotly.js 客户端渲染         │      │  Plotly → data/dcf_report.html│
+│  无需刷新页面，实时更新图表   │      │  单文件，浏览器直接打开       │
+└──────────┬──────────────────┘      └──────────────────────────────┘
+           │
+┌──────────▼──────────────────────────────────────────────────────┐
+│                       Layer 5 – Pipeline 调度层                   │
+│                       src/valuation_pipeline.py                   │
+│   run_pipeline(stock_list, valuation_date, start_date)            │
+│   → 批量估值 → 结果入库 → 返回 List[dict] 供上层消费              │
+└────────────────────────────┬────────────────────────────────────┘
                              │
 ┌────────────────────────────▼─────────────────────────────────────┐
 │                       Layer 4 – 估值计算层                         │
 │                       src/dcf_model.py                            │
 │   DCFAssumptions（参数封装）→ DCFModel（FCFF / TV / 折现）         │
+│   run_valuation(valuation_date) → 内在价值 + 高低估%              │
 └────────────────────────────┬─────────────────────────────────────┘
                              │
 ┌────────────────────────────▼─────────────────────────────────────┐
 │                       Layer 3 – 数据存储层                         │
 │                       src/database.py                             │
 │   SQLite（data/ah_dcf.db）                                        │
-│   stock_prices 表  │  dcf_valuation_results 表                    │
+│   stock_prices 表  │  dcf_valuation_results 表（含 start_date）    │
+│   UNIQUE(stock_code, valuation_date) → 按日期范围追加语义          │
 │   financial_assumptions 表（预留）                                │
 └──────────┬──────────────────────────────┬────────────────────────┘
            │                              │
@@ -57,6 +71,7 @@
 │                       Layer 1 – 配置层                            │
 │                       config/settings.py                          │
 │   A_SHARE_STOCKS（6位）  H_SHARE_STOCKS（5位）  STOCK_FINANCIALS  │
+│   STOCK_NAMES（中文名称映射）                                      │
 │   START_DATE / END_DATE  │  DB_PATH  │  DCF 参数  │  LOG_LEVEL   │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -73,7 +88,8 @@
 |--------|------|------|
 | `A_SHARE_STOCKS` | `["600519", "000001", ...]` | A 股股票池，AkShare 格式（6位纯数字） |
 | `H_SHARE_STOCKS` | `["00700", "00941", ...]` | H 股股票池，AkShare 格式（5位纯数字） |
-| `START_DATE` / `END_DATE` | `"YYYY-MM-DD"` | 历史数据下载日期范围 |
+| `STOCK_NAMES` | `dict[str, str]` | 股票代码→中文名称映射，Web UI 展示用 |
+| `START_DATE` / `END_DATE` | `"YYYY-MM-DD"` | 历史数据下载日期范围（Web 应用可由用户覆盖） |
 | `DB_PATH` | 绝对路径 | SQLite 数据库文件路径（由 BASE_DIR 动态拼接） |
 | DCF 全局参数 | `float` / `int` | WACC、终端增长率、预测年数、利润率等默认值 |
 | `STOCK_FINANCIALS` | `dict[str, dict]` | 各股票年报近似营收、总股本、WACC 和增长率覆盖值 |
@@ -195,31 +211,46 @@ STOCK_FINANCIALS[stock_code]（营收、总股本、WACC、增长率）
 
 ---
 
-### 3.5 可视化层（src/visualizer.py）
+### 3.5 可视化层
 
-**职责**：从数据库读取估值结果和历史价格，生成独立的交互式 HTML 报告，支持客户端实时筛选。
+系统提供两种可视化方式，共用同一套数据查询接口：
 
-**输出文件**：`data/dcf_report.html`，单文件，双击用浏览器打开，无需服务器。
+#### 3.5a Web 应用层（app.py + templates/index.html）
 
-**架构要点**：所有图表数据在生成时嵌入 HTML 的 `<script>` 块（JSON 格式），图表渲染和筛选逻辑全部在浏览器端由 Plotly.js 执行。筛选条件变化时调用 `Plotly.react()` 原地更新，无需重新请求服务器。
+**职责**：提供浏览器交互界面，用户实时选股 + 选日期 + 一键触发完整估值流程，结果通过 JSON API 返回并在浏览器端渲染。
 
-**交互筛选面板**：
+**运行方式**：`python app.py`，浏览器访问 `http://localhost:5000`
 
-| 控件 | 影响图表 | 说明 |
-|------|----------|------|
-| 股票复选框 | 全部 4 张图表 + 统计卡片 | 实时联动，无需点击确认 |
-| 全选/全不选/仅A/仅H 快捷按钮 | 全部 | 一键切换市场视图 |
-| 历史价格日期区间 | 仅历史走势图 | 起止日期选择器，按 trade_date 过滤 |
+**路由设计**：
 
-**图表组成**：
-
-| 图表 | 类型 | 说明 |
+| 路由 | 方法 | 说明 |
 |------|------|------|
-| DCF 结果明细表 | Plotly Table | 含颜色区分（绿=低估，红=高估） |
-| 高低估百分比 | 水平条形图 | 绿/红双色，按幅度升序排列 |
-| 市场价 vs 内在价值 | 分组条形图 | 蓝=市场价，橙=内在价值 |
-| A 股历史走势 | 折线图 | 左侧独立图，随日期区间实时更新 |
-| H 股历史走势 | 折线图 | 右侧独立图，与 A 股并排 |
+| `/` | GET | 渲染主页，传入股票列表和默认日期 |
+| `/api/run` | POST | 接收 `{stocks, start_date, end_date}`，执行下载+估值，返回 JSON |
+
+**`/api/run` 执行流程**：
+```
+接收 JSON payload
+    → init_tables()（幂等建表）
+    → download_a_share_data(stock_list, start_date, end_date)
+    → download_hk_stock_data(stock_list, start_date, end_date)
+    → run_pipeline(stock_list, valuation_date=end_date, start_date=start_date)
+    → query_price_history(code, start_date, end_date) × N只
+    → 返回 {results, history, a_stocks, h_stocks, errors}
+```
+
+**前端架构**（templates/index.html）：
+- Jinja2 模板，服务端注入股票列表
+- 自定义下拉多选框（▾），按 A/H 市场分组，支持搜索
+- `runValuation()` 异步 fetch POST /api/run
+- Plotly.js `Plotly.react()` 原地更新 5 个图表，无需刷新页面
+- 统计卡片（总数/低估/高估/平均幅度）随结果动态更新
+
+#### 3.5b 静态报告层（src/visualizer.py）
+
+**职责**：从数据库读取估值结果和历史价格，生成独立的 HTML 报告文件，双击用浏览器打开，无需服务器。
+
+**输出文件**：`data/dcf_report.html`，约 230KB，单文件无外部依赖（CDN 除外）。
 
 **主要函数**：
 
@@ -230,13 +261,22 @@ STOCK_FINANCIALS[stock_code]（营收、总股本、WACC、增长率）
 | `_js()` | 返回 JavaScript 渲染与筛选逻辑（`renderAll`、`renderTable` 等） |
 | `_build_html()` | 组装完整 HTML，嵌入 JSON 数据 + Plotly CDN + CSS + JS |
 
-**扩展方向**：新增图表只需在 `_build_html()` 加 div，在 `_js()` 加对应的 `Plotly.react()` 调用；无需修改 Python 数据查询逻辑。
+**JS 初始化修复**：脚本位于 `<body>` 末尾，DOM 解析完成后脚本才执行，`DOMContentLoaded` 可能已触发。通过检查 `document.readyState` 解决：
+```javascript
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', renderAll);
+} else {
+    renderAll();
+}
+```
 
 ---
 
 ### 3.6 入口 / 调度层
 
-**`main.py`（推荐入口）**：一键串联四个步骤，适合首次运行和日常使用。
+**`app.py`（Web 应用，推荐）**：启动 Flask 服务器，用户通过浏览器交互式选股、选日期、触发估值，实时查看图表。
+
+**`main.py`（命令行一键运行）**：串联四个步骤（init → download → valuate → report），适合批量运行和自动化调度。
 
 **`scripts/` 分步脚本**：适合调试单个阶段或在 CI/CD 中按需调用：
 
@@ -245,9 +285,9 @@ STOCK_FINANCIALS[stock_code]（营收、总股本、WACC、增长率）
 | `scripts/init_db.py` | 建库建表（幂等） |
 | `scripts/run_download.py` | 下载 A 股 + H 股数据 |
 | `scripts/run_valuation.py` | 运行估值 Pipeline |
-| `scripts/run_report.py` | 生成可视化 HTML 报告 |
+| `scripts/run_report.py` | 生成静态 HTML 报告 |
 
-**`src/valuation_pipeline.py`（Pipeline 协调器）**：合并股票池 → 批量查价 → 调用 DCFModel → 写库 → 打印汇总。生产环境可接入 Airflow / Prefect，实现每日定时触发。
+**`src/valuation_pipeline.py`（Pipeline 协调器）**：接收 `stock_list`、`valuation_date`、`start_date` 参数 → 批量查价 → 调用 DCFModel → 写库 → **返回结果列表**（供 Web API 使用）。生产环境可接入 Airflow / Prefect，实现每日定时触发。
 
 ---
 
@@ -293,5 +333,8 @@ STOCK_FINANCIALS[stock_code]（营收、总股本、WACC、增长率）
 | 股票代码格式 | 纯数字（6位/5位） | AkShare 原生格式，避免前缀转换，A/H 两市统一处理 |
 | 配置管理 | Python 文件（settings.py） | 类型安全、IDE 自动补全、直接 import、无额外解析依赖 |
 | DCF 模型 | 简化 FCFF + Gordon Growth | 在缺乏完整财务数据时保持模型结构完整，便于未来替换输入项 |
-| 可视化 | Plotly → 独立 HTML | 无需服务器，单文件分发，图表交互功能完整 |
-| 语言 | Python 3.8+ | 生态成熟，AkShare / pandas / numpy / plotly 工具链完备 |
+| Web 框架 | Flask | 轻量、无依赖、适合单页应用；不需要 ORM 或复杂路由 |
+| 前端渲染 | Plotly.js（客户端） | 数据由 API 返回，`Plotly.react()` 原地更新，无刷新页面 |
+| 可视化（静态） | Plotly → 独立 HTML | 无需服务器，单文件分发，图表交互功能完整 |
+| 追加语义 | valuation_date = end_date | 不同日期范围产生不同行，UNIQUE 约束保证同范围幂等 |
+| 语言 | Python 3.8+ | 生态成熟，AkShare / pandas / numpy / plotly / flask 工具链完备 |

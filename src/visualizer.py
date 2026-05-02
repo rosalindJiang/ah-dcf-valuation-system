@@ -453,7 +453,11 @@ def _js() -> str:
     function selectHOnly() { document.querySelectorAll('.stock-checkbox').forEach(cb => { cb.checked = H_STOCKS.includes(cb.value); }); renderAll(); }
 
     /* ── 页面初始化 ── */
-    document.addEventListener('DOMContentLoaded', renderAll);
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', renderAll);
+    } else {
+        renderAll();
+    }
     """
 
 

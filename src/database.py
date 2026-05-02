@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS dcf_valuation_results (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
     stock_code              TEXT    NOT NULL,
     valuation_date          TEXT    NOT NULL,
+    start_date              TEXT,
     forecast_years          INTEGER,
     wacc                    REAL,
     terminal_growth_rate    REAL,
@@ -116,6 +117,11 @@ def init_tables(db_path: str = None) -> None:
             conn.execute(_DDL_FINANCIAL_ASSUMPTIONS)
             conn.execute(_DDL_DCF_VALUATION_RESULTS)
         logger.info("数据库表初始化完成：stock_prices, financial_assumptions, dcf_valuation_results")
+        # 迁移：为已存在的旧表添加 start_date 列（幂等，列已存在时静默忽略）
+        try:
+            conn.execute("ALTER TABLE dcf_valuation_results ADD COLUMN start_date TEXT")
+        except Exception:
+            pass
     finally:
         conn.close()
 
@@ -172,18 +178,21 @@ def upsert_dcf_result(result: Dict[str, Any], db_path: str = None) -> None:
     """
     sql = """
         INSERT OR REPLACE INTO dcf_valuation_results
-            (stock_code, valuation_date, forecast_years, wacc,
+            (stock_code, valuation_date, start_date, forecast_years, wacc,
              terminal_growth_rate, estimated_intrinsic_value,
              latest_market_price, upside_downside_pct, assumptions_json)
         VALUES
-            (:stock_code, :valuation_date, :forecast_years, :wacc,
+            (:stock_code, :valuation_date, :start_date, :forecast_years, :wacc,
              :terminal_growth_rate, :estimated_intrinsic_value,
              :latest_market_price, :upside_downside_pct, :assumptions_json)
     """
     conn = get_connection(db_path)
     try:
+        # Ensure start_date key exists (result dict may not have it)
+        row = dict(result)
+        row.setdefault("start_date", "")
         with conn:
-            conn.execute(sql, result)
+            conn.execute(sql, row)
         logger.info("写入 DCF 估值结果：%s @ %s", result["stock_code"], result["valuation_date"])
     except sqlite3.Error as e:
         logger.error("写入 DCF 结果失败（%s）：%s", result.get("stock_code"), e)

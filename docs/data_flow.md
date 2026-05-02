@@ -2,26 +2,45 @@
 
 ## 1. 整体数据流概览
 
+系统支持两种触发方式，共用相同的数据处理链路：
+
 ```
-┌─────────────────┐      ┌──────────────────────┐      ┌────────────────────┐
-│  config/        │      │  外部数据源            │      │  SQLite 数据库      │
-│  settings.py    │      │  （AkShare）           │      │  data/ah_dcf.db    │
-│                 │      │                        │      │                    │
-│  A_SHARE_STOCKS │─────▶│  ak.stock_zh_a_hist()  │─────▶│  stock_prices 表   │
-│  H_SHARE_STOCKS │─────▶│  ak.stock_hk_hist()    │      │  source=akshare_a  │
-│  START_DATE     │      │                        │      │  source=akshare_hk │
-│  END_DATE       │      └──────────────────────┘      └─────────┬──────────┘
-│  DCF 参数       │◀─────────────────────────────────────────────┤
-└─────────────────┘                                              │
-        │                                             ┌──────────▼──────────┐
-        └────────────────────────────────────────────▶│  DCF 估值计算        │
-                                                       │  src/dcf_model.py   │
-                                                       └──────────┬──────────┘
-                                                                  │
-                                                       ┌──────────▼──────────┐
-                                                       │  dcf_valuation_     │
-                                                       │  results 表         │
-                                                       └─────────────────────┘
+触发方式 A（Web 应用）               触发方式 B（命令行）
+python app.py → 浏览器操作           python main.py
+用户选股 + 日期 → POST /api/run      settings.py 股票池 + 日期范围
+         │                                    │
+         └──────────────┬─────────────────────┘
+                        ▼
+┌─────────────────────────────────────────────┐
+│  AkShare 数据下载                            │
+│  ak.stock_zh_a_hist() / ak.stock_hk_hist()  │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│  SQLite: stock_prices 表                     │
+│  UNIQUE(stock_code, trade_date)              │
+│  INSERT OR REPLACE（幂等）                   │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│  DCF 估值计算（src/dcf_model.py）             │
+│  FCFF × N年 + Terminal Value + WACC 折现     │
+│  valuation_date = end_date                   │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│  SQLite: dcf_valuation_results 表            │
+│  UNIQUE(stock_code, valuation_date)          │
+│  不同 end_date → 追加新行                    │
+│  相同 end_date → 幂等替换                    │
+└──────────┬───────────────────────┬──────────┘
+           │ Web 应用               │ 命令行
+           ▼                       ▼
+  JSON → 浏览器 Plotly.js      data/dcf_report.html
+  实时渲染图表                  静态 HTML 报告
 ```
 
 ---
@@ -30,7 +49,7 @@
 
 ### Phase 0 — 配置加载
 
-**触发**：`main.py` 或任意 `scripts/` 脚本启动时自动执行。
+**触发**：`app.py`、`main.py` 或任意 `scripts/` 脚本启动时自动执行。
 
 **数据流**：
 
@@ -44,6 +63,9 @@ config/settings.py
     ├── END_DATE   = "2024-12-31"
     ├── DB_PATH    = "<project_root>/data/ah_dcf.db"
     ├── DCF 全局参数（DEFAULT_WACC=0.10, TERMINAL_GROWTH_RATE=0.03, ...）
+    ├── STOCK_NAMES = {
+    │       "600519": "贵州茅台", "00700": "腾讯控股", ...（中文名称映射，Web UI 展示）
+    │   }
     └── STOCK_FINANCIALS = {
             "600519": {"revenue": 150_300_000_000, "shares": 1_256_197_800,
                        "wacc": 0.08, "revenue_growth_rate": 0.12},
@@ -52,13 +74,14 @@ config/settings.py
             │
             ▼
     各模块 import settings → 直接使用常量
+    Web 应用：settings.STOCK_NAMES → 注入 Jinja2 模板 → 渲染下拉选股框
 ```
 
 ---
 
 ### Phase 1 — 数据库初始化
 
-**入口**：`main.py` Step 1 / `scripts/init_db.py`
+**入口**：`app.py`（启动时）/ `main.py` Step 1 / `scripts/init_db.py`
 
 **数据流**：
 
@@ -72,18 +95,22 @@ src/database.init_tables()
     ├── CREATE TABLE IF NOT EXISTS financial_assumptions
     │     （预留表，用于未来存储按股票/日期的自定义假设）
     │
-    └── CREATE TABLE IF NOT EXISTS dcf_valuation_results
-          (id, stock_code, valuation_date, forecast_years, wacc,
-           terminal_growth_rate, estimated_intrinsic_value,
-           latest_market_price, upside_downside_pct,
-           assumptions_json, created_at)
-          UNIQUE (stock_code, valuation_date)
+    ├── CREATE TABLE IF NOT EXISTS dcf_valuation_results
+    │     (id, stock_code, valuation_date, start_date, forecast_years, wacc,
+    │      terminal_growth_rate, estimated_intrinsic_value,
+    │      latest_market_price, upside_downside_pct,
+    │      assumptions_json, created_at)
+    │     UNIQUE (stock_code, valuation_date)   ← 追加语义的关键约束
+    │             │
+    │             ▼
+    └── ALTER TABLE dcf_valuation_results ADD COLUMN start_date TEXT
+          （迁移：为已有旧表添加 start_date 列，列已存在时静默忽略）
                   │
                   ▼
           data/ah_dcf.db（文件不存在则创建，已存在则跳过）
 ```
 
-**特性**：`CREATE TABLE IF NOT EXISTS` 保证幂等，重复执行不破坏已有数据。
+**特性**：`CREATE TABLE IF NOT EXISTS` 保证幂等，重复执行不破坏已有数据。`ALTER TABLE` 迁移同样幂等（`except` 静默忽略列已存在的错误）。
 
 ---
 
@@ -184,8 +211,9 @@ data/ah_dcf.db → stock_prices 表（每只约 489 条/两年，含港股非交
 
 ### Phase 4 — DCF 估值计算与入库
 
-**入口**：`main.py` Step 3 / `scripts/run_valuation.py`  
-**调用链**：`run_pipeline()` → `_valuate_single()` → `DCFModel.run_valuation()` → `database.upsert_dcf_result()`
+**入口（Web）**：`POST /api/run` → `run_pipeline(stock_list, valuation_date=end_date, start_date=start_date)`  
+**入口（命令行）**：`main.py` Step 3 / `scripts/run_valuation.py`  
+**调用链**：`run_pipeline()` → `_valuate_single()` → `DCFModel.run_valuation(valuation_date)` → `database.upsert_dcf_result()`
 
 **数据流**：
 
@@ -237,17 +265,54 @@ for each stock_code:
     │
     └─④  database.upsert_dcf_result(result)
               INSERT OR REPLACE INTO dcf_valuation_results
-                  (stock_code, valuation_date, forecast_years, wacc,
+                  (stock_code, valuation_date, start_date, forecast_years, wacc,
                    terminal_growth_rate, estimated_intrinsic_value,
                    latest_market_price, upside_downside_pct, assumptions_json)
               │
+              │  valuation_date = end_date（用户选择的结束日期）
+              │  追加语义：不同 end_date → 新行；相同 end_date → 幂等替换
               ▼
           data/ah_dcf.db → dcf_valuation_results 表
 ```
 
 ---
 
-### Phase 5 — 可视化报告生成
+### Phase 5a — Web API 响应与前端渲染
+
+**入口**：`POST /api/run`（由浏览器 `runValuation()` 发起）
+
+**数据流**：
+
+```
+run_pipeline() 返回 List[dict] 估值结果
+    │
+    ├─ query_price_history(code, start_date, end_date) × N只
+    │      SELECT ... FROM stock_prices WHERE stock_code=? AND trade_date BETWEEN ? AND ?
+    │      返回日期升序的价格序列
+    │
+    └─ 组装 JSON 响应：
+        {
+          "results":  [{stock_code, valuation_date, estimated_intrinsic_value, ...}],
+          "history":  {"600519": [{"date": "2024-01-02", "close": 1823.0}, ...]},
+          "a_stocks": ["600519", ...],
+          "h_stocks": ["00700", ...],
+          "errors":   []   # 下载失败等警告
+        }
+            │
+            ▼ HTTP 200 JSON
+浏览器端（templates/index.html）
+    │
+    ├─ 更新统计卡片（总数/低估/高估/平均幅度）
+    ├─ Plotly.react('chart-table',    tableTrace,   tableLayout)
+    ├─ Plotly.react('chart-upside',   barTrace,     upsideLayout)
+    ├─ Plotly.react('chart-compare',  compareTrace, compareLayout)
+    ├─ Plotly.react('chart-history-a', aHistTraces, histLayout)
+    └─ Plotly.react('chart-history-h', hHistTraces, histLayout)
+```
+
+---
+
+### Phase 5b — 静态可视化报告生成
 
 **入口**：`main.py` Step 4 / `scripts/run_report.py`  
 **调用链**：`generate_report()` → 四个图表函数 → `_build_html()` → 写入 HTML 文件
@@ -293,13 +358,21 @@ data/dcf_report.html（约 230KB，独立文件，无需服务器）
 
 ### Phase 6 — 结果查询与投资参考
 
-**方式 A：HTML 可视化报告（run_report.py / main.py 自动生成）**
+**方式 A：Web 应用（推荐）**
+
+```
+python app.py
+# 浏览器访问 http://localhost:5000
+# 选股 + 日期 → 点击"运行估值" → 实时查看图表
+```
+
+**方式 B：静态 HTML 报告（run_report.py / main.py 自动生成）**
 
 ```
 open data/dcf_report.html   # 浏览器打开，查看交互式图表
 ```
 
-**方式 B：命令行输出（run_valuation.py / main.py 自动打印）**
+**方式 C：命令行输出（run_valuation.py / main.py 自动打印）**
 
 ```
 ================================================================================
@@ -323,14 +396,24 @@ open data/dcf_report.html   # 浏览器打开，查看交互式图表
 ================================================================================
 ```
 
-**方式 C：直接查询 SQLite**
+**方式 D：直接查询 SQLite**
 
 ```sql
--- 查看所有估值结果（按高低估排序）
-SELECT stock_code, valuation_date, latest_market_price,
-       estimated_intrinsic_value, upside_downside_pct
+-- 查看所有估值结果，每只股票取最新一次（按高低估排序）
+SELECT r.stock_code, r.start_date, r.valuation_date,
+       r.latest_market_price, r.estimated_intrinsic_value, r.upside_downside_pct
+FROM dcf_valuation_results r
+INNER JOIN (
+    SELECT stock_code, MAX(valuation_date) AS max_date
+    FROM dcf_valuation_results GROUP BY stock_code
+) latest ON r.stock_code = latest.stock_code AND r.valuation_date = latest.max_date
+ORDER BY r.upside_downside_pct DESC;
+
+-- 查看同一股票不同日期范围的历史估值（追加语义）
+SELECT stock_code, start_date, valuation_date, estimated_intrinsic_value
 FROM dcf_valuation_results
-ORDER BY upside_downside_pct DESC;
+WHERE stock_code = '600519'
+ORDER BY valuation_date DESC;
 
 -- 查看 A 股和 H 股数据量对比
 SELECT source, COUNT(*) as records

@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 def run_pipeline(
     stock_list: Optional[List[str]] = None,
     db_path: Optional[str] = None,
-) -> None:
+    valuation_date: Optional[str] = None,
+    start_date: Optional[str] = None,
+) -> list:
     """
     执行全量估值 Pipeline。
 
@@ -33,8 +35,13 @@ def run_pipeline(
         5. 打印结果汇总表格
 
     Args:
-        stock_list: 自定义股票列表，None 时使用 settings 中的全量列表。
-        db_path:    数据库路径，None 时使用 settings.DB_PATH。
+        stock_list:     自定义股票列表，None 时使用 settings 中的全量列表。
+        db_path:        数据库路径，None 时使用 settings.DB_PATH。
+        valuation_date: 估值日期（YYYY-MM-DD），默认使用今天。
+        start_date:     数据起始日期，记录到结果中供调用方使用。
+
+    Returns:
+        成功完成估值的结果列表。
     """
     all_stocks = stock_list or (settings.A_SHARE_STOCKS + settings.H_SHARE_STOCKS)
     logger.info("Pipeline 启动，待估值股票 %d 只", len(all_stocks))
@@ -44,7 +51,7 @@ def run_pipeline(
 
     for code in all_stocks:
         try:
-            result = _valuate_single(code, db_path)
+            result = _valuate_single(code, db_path, valuation_date=valuation_date, start_date=start_date)
             if result:
                 results.append(result)
             else:
@@ -54,15 +61,23 @@ def run_pipeline(
             skipped.append(code)
 
     _print_summary(results, skipped)
+    return results
 
 
-def _valuate_single(stock_code: str, db_path: Optional[str]) -> Optional[dict]:
+def _valuate_single(
+    stock_code: str,
+    db_path: Optional[str],
+    valuation_date: Optional[str] = None,
+    start_date: Optional[str] = None,
+) -> Optional[dict]:
     """
     对单只股票执行估值并持久化结果。
 
     Args:
-        stock_code: 股票代码。
-        db_path:    数据库路径。
+        stock_code:     股票代码。
+        db_path:        数据库路径。
+        valuation_date: 估值日期（YYYY-MM-DD），默认使用今天。
+        start_date:     数据起始日期，附加到结果中供调用方使用。
 
     Returns:
         估值结果字典，若无价格数据则返回 None。
@@ -89,7 +104,11 @@ def _valuate_single(stock_code: str, db_path: Optional[str]) -> Optional[dict]:
 
     # 运行 DCF 估值
     model  = DCFModel(stock_code, market_price, assumptions, base_revenue, total_shares)
-    result = model.run_valuation()
+    result = model.run_valuation(valuation_date=valuation_date)
+
+    # 附加 start_date（供调用方记录，不强制写入 DB 字段）
+    if start_date:
+        result["start_date"] = start_date
 
     # 写入数据库
     database.upsert_dcf_result(result, db_path)

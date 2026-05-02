@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AH 股 DCF 估值系统</title>
+  <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background: #f0f2f5;
+      color: #2c3e50;
+      min-height: 100vh;
+    }
+
+    /* 顶部标题栏 */
+    .header {
+      background: linear-gradient(135deg, #1a252f 0%, #2980b9 100%);
+      color: white;
+      padding: 28px 40px;
+    }
+    .header h1 { font-size: 26px; font-weight: 700; letter-spacing: .5px; margin-bottom: 6px; }
+    .header p  { font-size: 13px; opacity: .80; }
+
+    /* 统计卡片行 */
+    .stats-row {
+      display: flex;
+      gap: 16px;
+      padding: 20px 40px;
+      background: white;
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+    }
+    .stat-card {
+      flex: 1;
+      background: #f8fafc;
+      border-radius: 10px;
+      padding: 16px 20px;
+      border-left: 4px solid #3498db;
+    }
+    .stat-card.green  { border-color: #27ae60; }
+    .stat-card.red    { border-color: #e74c3c; }
+    .stat-card.orange { border-color: #e67e22; }
+    .stat-value { font-size: 28px; font-weight: 700; }
+    .stat-label { font-size: 12px; color: #7f8c8d; margin-top: 4px; }
+
+    /* 主内容区 */
+    .container { padding: 24px 40px; max-width: 1400px; margin: 0 auto; }
+
+    /* 控制面板卡片 */
+    .control-card {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.07);
+      padding: 20px 24px;
+      margin-bottom: 20px;
+    }
+    .control-card h3 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 16px;
+    }
+    .control-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .control-row:last-child { margin-bottom: 0; }
+    .control-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #555;
+      min-width: 80px;
+    }
+
+    /* 自定义下拉 */
+    .dropdown-wrapper { position: relative; }
+    .dropdown-trigger {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 14px;
+      border: 1px solid #dce1e7;
+      border-radius: 8px;
+      background: white;
+      cursor: pointer;
+      font-size: 13px;
+      color: #2c3e50;
+      min-width: 160px;
+      user-select: none;
+      transition: border-color .15s;
+    }
+    .dropdown-trigger:hover { border-color: #3498db; }
+    .dropdown-trigger .arrow { margin-left: auto; font-size: 11px; color: #95a5a6; }
+    .dropdown-panel {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      z-index: 999;
+      background: white;
+      border: 1px solid #dce1e7;
+      border-radius: 10px;
+      box-shadow: 0 6px 24px rgba(0,0,0,.12);
+      min-width: 320px;
+      padding: 12px;
+    }
+    .dropdown-panel.open { display: block; }
+    .dropdown-search {
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid #dce1e7;
+      border-radius: 6px;
+      font-size: 13px;
+      margin-bottom: 10px;
+      outline: none;
+    }
+    .dropdown-search:focus { border-color: #3498db; }
+    .dropdown-quick {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .stock-group-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: #95a5a6;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      margin: 8px 0 6px;
+    }
+    .stock-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .stock-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      font-size: 12px;
+      padding: 5px 10px;
+      border: 1px solid #dce1e7;
+      border-radius: 20px;
+      background: #f8fafc;
+      transition: all .15s;
+      user-select: none;
+    }
+    .stock-option:hover { border-color: #3498db; background: #eaf4fd; }
+    .stock-option.selected { border-color: #3498db; background: #eaf4fd; }
+    .stock-option input[type=checkbox] { display: none; }
+
+    /* 徽章 */
+    .badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      letter-spacing: .3px;
+    }
+    .badge-a { background: #e8f5e9; color: #2e7d32; }
+    .badge-h { background: #fff3e0; color: #e65100; }
+
+    /* 快捷按钮 */
+    .btn-sm {
+      font-size: 12px;
+      padding: 5px 12px;
+      border: 1px solid #bdc3c7;
+      border-radius: 5px;
+      background: white;
+      cursor: pointer;
+      color: #555;
+      transition: all .15s;
+    }
+    .btn-sm:hover { background: #ecf0f1; border-color: #95a5a6; }
+
+    /* 日期输入 */
+    .date-input {
+      font-size: 13px;
+      padding: 7px 10px;
+      border: 1px solid #dce1e7;
+      border-radius: 6px;
+      color: #2c3e50;
+      outline: none;
+    }
+    .date-input:focus { border-color: #3498db; }
+    .date-sep { color: #95a5a6; font-size: 13px; }
+
+    /* 运行按钮 */
+    .btn-run {
+      padding: 9px 28px;
+      font-size: 14px;
+      font-weight: 600;
+      background: linear-gradient(135deg, #1a252f 0%, #2980b9 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .btn-run:hover { opacity: .88; }
+    .btn-run:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* 进度指示 */
+    .loading-bar {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: #eaf4fd;
+      border: 1px solid #aed6f1;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #1a6fa0;
+      margin-top: 14px;
+    }
+    .loading-bar.visible { display: flex; }
+    .spinner {
+      width: 18px; height: 18px;
+      border: 3px solid #aed6f1;
+      border-top-color: #2980b9;
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* 错误 / 警告框 */
+    .alert-box {
+      display: none;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+    .alert-box.warning {
+      background: #fef9e7;
+      border: 1px solid #f9ca24;
+      color: #7d6608;
+    }
+    .alert-box.error {
+      background: #fdedec;
+      border: 1px solid #e74c3c;
+      color: #922b21;
+    }
+    .alert-box.visible { display: block; }
+
+    /* 图表卡片 */
+    .chart-card {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.07);
+      padding: 20px 16px;
+      margin-bottom: 22px;
+    }
+    .history-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-bottom: 22px;
+    }
+    .history-row .chart-card { margin-bottom: 0; }
+
+    /* 空状态 */
+    .empty-state {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 120px;
+      color: #95a5a6;
+      font-size: 14px;
+    }
+
+    /* 免责声明 */
+    .disclaimer {
+      background: #fef9e7;
+      border: 1px solid #f9ca24;
+      border-radius: 8px;
+      padding: 12px 18px;
+      font-size: 13px;
+      color: #7d6608;
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
+
+    /* 底部 */
+    .footer {
+      text-align: center;
+      padding: 18px;
+      font-size: 12px;
+      color: #95a5a6;
+    }
+
+    @media (max-width: 900px) {
+      .stats-row, .container, .header { padding-left: 16px; padding-right: 16px; }
+      .history-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- 顶部标题 -->
+<div class="header">
+  <h1>AH 股 DCF 估值系统</h1>
+  <p>选择股票和日期范围，点击「运行估值」触发完整流水线：下载行情 → DCF 估值 → 可视化</p>
+</div>
+
+<!-- 统计卡片 -->
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-value" id="stat-total">—</div>
+    <div class="stat-label">估值股票总数</div>
+  </div>
+  <div class="stat-card green">
+    <div class="stat-value" id="stat-under">—</div>
+    <div class="stat-label">低估股票数量</div>
+  </div>
+  <div class="stat-card red">
+    <div class="stat-value" id="stat-over">—</div>
+    <div class="stat-label">高估股票数量</div>
+  </div>
+  <div class="stat-card orange">
+    <div class="stat-value" id="stat-avg">—</div>
+    <div class="stat-label">平均高低估幅度</div>
+  </div>
+</div>
+
+<!-- 主内容 -->
+<div class="container">
+
+  <!-- 控制面板 -->
+  <div class="control-card">
+    <h3>估值参数设置</h3>
+
+    <!-- 股票选择 -->
+    <div class="control-row">
+      <span class="control-label">选择股票</span>
+
+      <div class="dropdown-wrapper" id="dd-wrapper">
+        <div class="dropdown-trigger" id="dd-trigger" onclick="toggleDropdown()">
+          <span id="dd-label">已选 0 只股票</span>
+          <span class="arrow">▾</span>
+        </div>
+        <div class="dropdown-panel" id="dd-panel">
+          <input class="dropdown-search" type="text" placeholder="搜索股票代码或名称…"
+                 oninput="filterStocks(this.value)">
+          <div class="dropdown-quick">
+            <button class="btn-sm" onclick="selectAll()">全选</button>
+            <button class="btn-sm" onclick="clearAll()">清空</button>
+            <button class="btn-sm" onclick="selectAOnly()">仅A股</button>
+            <button class="btn-sm" onclick="selectHOnly()">仅H股</button>
+          </div>
+
+          <div class="stock-group-label">A 股</div>
+          <div class="stock-options" id="group-a">
+            {% for s in stocks if s.market == 'A' %}
+            <label class="stock-option" data-code="{{ s.code }}" data-name="{{ s.name }}" data-market="A">
+              <input type="checkbox" class="stock-cb" value="{{ s.code }}" onchange="updateDropdownLabel()">
+              <span class="badge badge-a">A</span>{{ s.code }} {{ s.name }}
+            </label>
+            {% endfor %}
+          </div>
+
+          <div class="stock-group-label">H 股</div>
+          <div class="stock-options" id="group-h">
+            {% for s in stocks if s.market == 'H' %}
+            <label class="stock-option" data-code="{{ s.code }}" data-name="{{ s.name }}" data-market="H">
+              <input type="checkbox" class="stock-cb" value="{{ s.code }}" onchange="updateDropdownLabel()">
+              <span class="badge badge-h">H</span>{{ s.code }} {{ s.name }}
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 日期范围 -->
+    <div class="control-row">
+      <span class="control-label">日期范围</span>
+      <input type="date" id="startDate" class="date-input" value="{{ default_start }}">
+      <span class="date-sep">至</span>
+      <input type="date" id="endDate" class="date-input" value="{{ default_end }}">
+    </div>
+
+    <!-- 运行按钮 -->
+    <div class="control-row">
+      <button class="btn-run" id="btn-run" onclick="runValuation()">运行估值</button>
+    </div>
+
+    <!-- 进度条 -->
+    <div class="loading-bar" id="loading-bar">
+      <div class="spinner"></div>
+      <span id="loading-msg">正在下载行情数据并运行 DCF 估值，请稍候…</span>
+    </div>
+  </div>
+
+  <!-- 告警框 -->
+  <div class="alert-box warning" id="alert-warning"></div>
+  <div class="alert-box error" id="alert-error"></div>
+
+  <!-- 免责声明 -->
+  <div class="disclaimer">
+    ⚠️ <strong>免责声明：</strong>本系统为 Demo 简化 DCF 估值，基准营收和总股本来自年报近似值
+    （config/settings.py STOCK_FINANCIALS），WACC 按行业手工设定，未接入实时财务报表，净负债未扣减。
+    估值结果仅供学习和系统验证，<strong>不构成任何投资建议</strong>。
+  </div>
+
+  <!-- 图表区 -->
+  <div class="chart-card"><div id="chart-table"><div class="empty-state">请选择股票后点击「运行估值」</div></div></div>
+  <div class="chart-card"><div id="chart-upside"><div class="empty-state">请选择股票后点击「运行估值」</div></div></div>
+  <div class="chart-card"><div id="chart-compare"><div class="empty-state">请选择股票后点击「运行估值」</div></div></div>
+
+  <!-- 历史走势（A/H 并排） -->
+  <div class="history-row">
+    <div class="chart-card"><div id="chart-history-a"><div class="empty-state">请选择股票后点击「运行估值」</div></div></div>
+    <div class="chart-card"><div id="chart-history-h"><div class="empty-state">请选择股票后点击「运行估值」</div></div></div>
+  </div>
+
+</div>
+
+<div class="footer">
+  AH 股 DCF 估值计算系统 &nbsp;·&nbsp; Powered by Flask + Plotly
+</div>
+
+<script>
+  const COLORS = ["#3498db","#e74c3c","#2ecc71","#9b59b6","#f39c12",
+                  "#1abc9c","#e67e22","#34495e","#e91e63","#00bcd4"];
+
+  /* ── 下拉框控制 ── */
+  function toggleDropdown() {
+    const panel = document.getElementById('dd-panel');
+    panel.classList.toggle('open');
+  }
+
+  // 点击外部关闭下拉
+  document.addEventListener('click', function(e) {
+    const wrapper = document.getElementById('dd-wrapper');
+    if (!wrapper.contains(e.target)) {
+      document.getElementById('dd-panel').classList.remove('open');
+    }
+  });
+
+  function filterStocks(query) {
+    const q = query.toLowerCase().trim();
+    document.querySelectorAll('.stock-option').forEach(function(el) {
+      const code = (el.dataset.code || '').toLowerCase();
+      const name = (el.dataset.name || '').toLowerCase();
+      el.style.display = (!q || code.includes(q) || name.includes(q)) ? '' : 'none';
+    });
+  }
+
+  function selectAll() {
+    document.querySelectorAll('.stock-cb').forEach(function(cb) { cb.checked = true; });
+    updateDropdownLabel();
+  }
+
+  function clearAll() {
+    document.querySelectorAll('.stock-cb').forEach(function(cb) { cb.checked = false; });
+    updateDropdownLabel();
+  }
+
+  function selectAOnly() {
+    document.querySelectorAll('.stock-cb').forEach(function(cb) {
+      const opt = cb.closest('.stock-option');
+      cb.checked = opt && opt.dataset.market === 'A';
+    });
+    updateDropdownLabel();
+  }
+
+  function selectHOnly() {
+    document.querySelectorAll('.stock-cb').forEach(function(cb) {
+      const opt = cb.closest('.stock-option');
+      cb.checked = opt && opt.dataset.market === 'H';
+    });
+    updateDropdownLabel();
+  }
+
+  function getSelectedStocks() {
+    return Array.from(document.querySelectorAll('.stock-cb:checked')).map(function(cb) {
+      return cb.value;
+    });
+  }
+
+  function updateDropdownLabel() {
+    const n = getSelectedStocks().length;
+    document.getElementById('dd-label').textContent = '已选 ' + n + ' 只股票';
+    // Highlight selected options
+    document.querySelectorAll('.stock-option').forEach(function(el) {
+      const cb = el.querySelector('.stock-cb');
+      el.classList.toggle('selected', cb && cb.checked);
+    });
+  }
+
+  /* ── 运行估值 ── */
+  async function runValuation() {
+    const stocks = getSelectedStocks();
+    if (!stocks.length) {
+      showError('请至少选择一只股票');
+      return;
+    }
+    const startDate = document.getElementById('startDate').value;
+    const endDate   = document.getElementById('endDate').value;
+    if (!startDate || !endDate) {
+      showError('请填写完整的日期范围');
+      return;
+    }
+    if (startDate > endDate) {
+      showError('起始日期不能晚于结束日期');
+      return;
+    }
+
+    // 显示加载状态
+    clearAlerts();
+    setLoading(true);
+
+    try {
+      const resp = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stocks, start_date: startDate, end_date: endDate }),
+      });
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        showError(data.error || '服务器错误，请查看日志');
+        return;
+      }
+
+      // 显示警告（下载失败等非致命错误）
+      if (data.errors && data.errors.length) {
+        showWarning(data.errors.join('<br>'));
+      }
+
+      // 渲染图表
+      renderAll(data.results, data.history, data.a_stocks, data.h_stocks);
+
+    } catch (err) {
+      showError('请求失败：' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function setLoading(on) {
+    const bar = document.getElementById('loading-bar');
+    const btn = document.getElementById('btn-run');
+    bar.classList.toggle('visible', on);
+    btn.disabled = on;
+  }
+
+  function clearAlerts() {
+    const w = document.getElementById('alert-warning');
+    const e = document.getElementById('alert-error');
+    w.classList.remove('visible'); w.innerHTML = '';
+    e.classList.remove('visible'); e.innerHTML = '';
+  }
+
+  function showWarning(msg) {
+    const el = document.getElementById('alert-warning');
+    el.innerHTML = '⚠️ ' + msg;
+    el.classList.add('visible');
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('alert-error');
+    el.innerHTML = '❌ ' + msg;
+    el.classList.add('visible');
+  }
+
+  /* ── 主渲染函数 ── */
+  function renderAll(results, history, aStocks, hStocks) {
+    renderStats(results);
+    renderTable(results);
+    renderUpsideBar(results);
+    renderPriceComparison(results);
+    renderPriceHistory(aStocks, hStocks, history);
+  }
+
+  /* ── 统计卡片 ── */
+  function renderStats(data) {
+    const n     = data.length;
+    const under = data.filter(function(r) { return r.upside_downside_pct > 0; }).length;
+    const over  = n - under;
+    const avg   = n ? data.reduce(function(s, r) { return s + r.upside_downside_pct; }, 0) / n : 0;
+    document.getElementById('stat-total').textContent = n;
+    document.getElementById('stat-under').textContent = under;
+    document.getElementById('stat-over').textContent  = over;
+    document.getElementById('stat-avg').textContent   = (avg >= 0 ? '+' : '') + avg.toFixed(1) + '%';
+  }
+
+  /* ── 评级 ── */
+  function rating(v) {
+    if (v >= 30)  return "⬆⬆ 明显低估";
+    if (v >= 10)  return "⬆ 低估";
+    if (v >= -10) return "→ 合理";
+    if (v >= -30) return "⬇ 高估";
+    return "⬇⬇ 明显高估";
+  }
+
+  /* ── 明细表格 ── */
+  function renderTable(data) {
+    const el = document.getElementById('chart-table');
+    if (!data.length) {
+      el.innerHTML = '<div class="empty-state">暂无估值数据</div>';
+      return;
+    }
+    const rowColors = data.map(function(r) {
+      return r.upside_downside_pct >= 10 ? "#d5f5e3" :
+             r.upside_downside_pct <= -10 ? "#fadbd8" : "#fdfefe";
+    });
+    const trace = {
+      type: "table",
+      header: {
+        values: ["股票代码","估值日期","市场价","内在价值","高低估(%)","WACC","终端增长率","综合评级"],
+        fill: { color: "#2c3e50" },
+        font: { color: "white", size: 13 },
+        align: "center",
+        height: 38
+      },
+      cells: {
+        values: [
+          data.map(function(r) { return r.stock_code; }),
+          data.map(function(r) { return r.valuation_date; }),
+          data.map(function(r) { return r.latest_market_price.toFixed(2); }),
+          data.map(function(r) { return r.estimated_intrinsic_value.toFixed(2); }),
+          data.map(function(r) { return (r.upside_downside_pct >= 0 ? "+" : "") + r.upside_downside_pct.toFixed(1) + "%"; }),
+          data.map(function(r) { return (r.wacc * 100).toFixed(1) + "%"; }),
+          data.map(function(r) { return (r.terminal_growth_rate * 100).toFixed(1) + "%"; }),
+          data.map(function(r) { return rating(r.upside_downside_pct); })
+        ],
+        fill: { color: Array(8).fill(rowColors) },
+        align: "center",
+        font: { size: 12 },
+        height: 32
+      }
+    };
+    Plotly.react(el, [trace], {
+      title: { text: "DCF 估值结果明细", font: { size: 15 } },
+      height: Math.max(280, data.length * 36 + 110),
+      margin: { l: 20, r: 20, t: 55, b: 20 },
+      paper_bgcolor: "white",
+      font: { family: "Arial, sans-serif" }
+    }, { displayModeBar: false });
+  }
+
+  /* ── 高低估条形图 ── */
+  function renderUpsideBar(data) {
+    const el = document.getElementById('chart-upside');
+    if (!data.length) {
+      el.innerHTML = '<div class="empty-state">暂无估值数据</div>';
+      return;
+    }
+    const sorted = data.slice().sort(function(a, b) { return a.upside_downside_pct - b.upside_downside_pct; });
+    const pcts   = sorted.map(function(r) { return r.upside_downside_pct; });
+    Plotly.react(el, [{
+      type: "bar", orientation: "h",
+      x: pcts,
+      y: sorted.map(function(r) { return r.stock_code; }),
+      marker: { color: pcts.map(function(p) { return p > 0 ? "#27ae60" : "#e74c3c"; }) },
+      text: pcts.map(function(p) { return (p >= 0 ? "+" : "") + p.toFixed(1) + "%"; }),
+      textposition: "outside",
+      hovertemplate: "<b>%{y}</b><br>高低估：%{x:+.2f}%<extra></extra>"
+    }], {
+      title: { text: "各股票高低估百分比（正值 = 低估，负值 = 高估）", font: { size: 15 } },
+      xaxis: { title: "高低估 (%)", gridcolor: "#f0f0f0", zerolinecolor: "#95a5a6" },
+      height: Math.max(360, sorted.length * 46),
+      plot_bgcolor: "white", paper_bgcolor: "white",
+      font: { family: "Arial, sans-serif" },
+      margin: { l: 20, r: 70, t: 55, b: 40 },
+      shapes: [{ type: "line", x0: 0, x1: 0, y0: -0.5, y1: sorted.length - 0.5,
+                 line: { color: "#95a5a6", width: 1.5, dash: "dash" } }]
+    }, { displayModeBar: false });
+  }
+
+  /* ── 市场价 vs 内在价值 ── */
+  function renderPriceComparison(data) {
+    const el = document.getElementById('chart-compare');
+    if (!data.length) {
+      el.innerHTML = '<div class="empty-state">暂无估值数据</div>';
+      return;
+    }
+    const codes = data.map(function(r) { return r.stock_code; });
+    Plotly.react(el, [
+      {
+        type: "bar", name: "市场价", x: codes,
+        y: data.map(function(r) { return r.latest_market_price; }),
+        marker: { color: "#3498db" },
+        hovertemplate: "<b>%{x}</b><br>市场价：%{y:.2f}<extra></extra>"
+      },
+      {
+        type: "bar", name: "DCF 内在价值", x: codes,
+        y: data.map(function(r) { return r.estimated_intrinsic_value; }),
+        marker: { color: "#e67e22" },
+        hovertemplate: "<b>%{x}</b><br>内在价值：%{y:.2f}<extra></extra>"
+      }
+    ], {
+      title: { text: "市场价 vs DCF 内在价值对比", font: { size: 15 } },
+      barmode: "group",
+      xaxis: { title: "股票代码" },
+      yaxis: { title: "价格（元 / 港元）", gridcolor: "#f0f0f0" },
+      height: 420,
+      plot_bgcolor: "white", paper_bgcolor: "white",
+      font: { family: "Arial, sans-serif" },
+      legend: { x: 0.01, y: 0.99, bgcolor: "rgba(255,255,255,0.85)" },
+      margin: { l: 20, r: 20, t: 55, b: 40 }
+    }, { displayModeBar: false });
+  }
+
+  /* ── 历史走势图 ── */
+  function renderPriceHistory(aStocks, hStocks, history) {
+    function buildTraces(codes, prefix) {
+      return codes.map(function(code, i) {
+        const hist = history[code] || [];
+        return {
+          type: "scatter", mode: "lines",
+          name: prefix + ":" + code,
+          x: hist.map(function(h) { return h.date; }),
+          y: hist.map(function(h) { return h.close; }),
+          line: { color: COLORS[i % COLORS.length], width: 1.5 },
+          hovertemplate: "<b>" + code + "</b><br>%{x}<br>收盘价：%{y:.2f}<extra></extra>"
+        };
+      });
+    }
+    function histLayout(title) {
+      return {
+        title: { text: title, font: { size: 14 } },
+        height: 350,
+        plot_bgcolor: "white", paper_bgcolor: "white",
+        font: { family: "Arial, sans-serif" },
+        xaxis: { gridcolor: "#f0f0f0", tickangle: -30 },
+        yaxis: { gridcolor: "#f0f0f0" },
+        legend: { bgcolor: "rgba(255,255,255,0.85)", font: { size: 11 } },
+        margin: { l: 50, r: 20, t: 45, b: 50 }
+      };
+    }
+
+    const elA = document.getElementById('chart-history-a');
+    const elH = document.getElementById('chart-history-h');
+
+    if (!aStocks || !aStocks.length) {
+      elA.innerHTML = '<div class="empty-state">未选择 A 股</div>';
+    } else {
+      Plotly.react(elA, buildTraces(aStocks, "A"), histLayout("A 股历史收盘价走势"),
+                   { displayModeBar: false });
+    }
+    if (!hStocks || !hStocks.length) {
+      elH.innerHTML = '<div class="empty-state">未选择 H 股</div>';
+    } else {
+      Plotly.react(elH, buildTraces(hStocks, "H"), histLayout("H 股历史收盘价走势"),
+                   { displayModeBar: false });
+    }
+  }
+
+  // 初始化下拉标签
+  updateDropdownLabel();
+</script>
+
+</body>
+</html>
